@@ -1,0 +1,6 @@
+{
+  "name": "IFC ACADEMY",
+  "description": "نظام إدارة احترافي متكامل لأكاديمية IFC ACADEMY للفنون القتالية — متابعة اللاعبين، الاشتراكات والمدفوعات، وتنبيهات السداد، والحضور اليومي.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="500" height="500">
+  <defs>
+    <radialGradient id="yellowBg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFF017" />
+      <stop offset="70%" stop-color="#FFDD00" />
+      <stop offset="100%" stop-color="#ECC600" />
+    </radialGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+  </defs>
+
+  <!-- Main Yellow Circular Base -->
+  <circle cx="250" cy="250" r="236" fill="url(#yellowBg)" stroke="#000000" stroke-width="14" />
+  
+  <!-- Inner Ring Line -->
+  <circle cx="250" cy="250" r="216" fill="none" stroke="#000000" stroke-width="4" />
+  <circle cx="250" cy="250" r="172" fill="none" stroke="#000000" stroke-width="4" />
+
+  <!-- Martial Artist Silhouette in High Kick Pose -->
+  <g fill="#000000">
+    <!-- Head & Helmet/Hair Silhouette -->
+    <path d="M 235 125 C 242 110, 260 110, 266 122 C 270 130, 265 142, 252 146 C 242 144, 230 135, 235 125 Z" />
+    <!-- Raised Punch/Glove (Left Hand) -->
+    <path d="M 215 130 C 220 115, 240 120, 236 138 C 228 148, 210 144, 215 130 Z" />
+    <!-- Torso & Arms -->
+    <path d="M 230 140 C 210 150, 190 170, 185 200 C 180 230, 205 240, 220 220 C 235 200, 245 180, 250 160 C 255 148, 245 138, 230 140 Z" />
+    <!-- Dynamic Arm & Guard -->
+    <path d="M 185 190 C 165 180, 160 210, 175 225 C 190 238, 205 220, 195 200 Z" />
+    <!-- High Extension Kick Leg (Right Leg reaching top right) -->
+    <path d="M 255 170 C 275 150, 320 110, 370 70 C 390 55, 420 40, 440 30 C 445 40, 435 60, 410 75 C 370 100, 320 145, 290 185 C 275 205, 250 200, 255 170 Z" />
+    <!-- Foot at High Apex -->
+    <path d="M 430 25 C 445 20, 460 35, 445 50 C 430 55, 415 45, 430 25 Z" />
+    <!-- Supporting Standing Leg (Left Leg straight down) -->
+    <path d="M 240 230 C 245 280, 242 330, 245 380 C 246 395, 242 410, 235 425 C 248 428, 260 422, 262 405 C 265 365, 260 310, 268 250 C 265 235, 250 225, 240 230 Z" />
+    <!-- Foot Planted Base -->
+    <path d="M 235 420 C 230 425, 235 435, 250 435 C 265 435, 270 425, 260 418 Z" />
+  </g>
+
+  <!-- Yellow highlights and muscle cuts on silhouette -->
+  <g fill="#FFDD00">
+    <path d="M 240 150 C 235 170, 225 190, 210 205 C 215 190, 230 170, 240 150 Z" />
+    <path d="M 265 160 C 295 130, 340 95, 380 70 C 360 90, 310 130, 275 165 Z" />
+    <path d="M 250 270 C 252 320, 248 370, 248 410 C 252 370, 255 320, 255 270 Z" />
+  </g>
+
+  <!-- IFC Stylized Heavy Bold Monogram Across Center -->
+  <g filter="url(#shadow)">
+    <!-- Letter I -->
+    <path d="M 60 255 L 140 255 L 140 275 L 115 275 L 105 315 L 135 315 L 135 335 L 55 335 L 55 315 L 80 315 L 90 275 L 60 275 Z" fill="#000000" stroke="#FFDD00" stroke-width="4" stroke-linejoin="round" />
+    
+    <!-- Letter F -->
+    <path d="M 155 255 L 255 255 L 255 278 L 195 278 L 190 295 L 245 295 L 245 315 L 185 315 L 180 340 L 150 340 Z" fill="#000000" stroke="#FFDD00" stroke-width="4" stroke-linejoin="round" />
+
+    <!-- Letter C -->
+    <path d="M 305 255 L 435 255 L 435 285 L 345 285 L 340 310 L 435 310 L 435 340 L 295 340 C 285 310, 290 275, 305 255 Z" fill="#000000" stroke="#FFDD00" stroke-width="4" stroke-linejoin="round" />
+  </g>
+
+  <!-- Curved Text Banner: "- international fight club -" -->
+  <path id="curve" d="M 90 380 A 195 195 0 0 0 410 380" fill="none" />
+  <text font-family="'Arial Black', Impact, sans-serif" font-size="25" font-weight="900" letter-spacing="4" fill="#000000">
+    <textPath href="#curve" startOffset="50%" text-anchor="middle">
+      — INTERNATIONAL FIGHT CLUB —
+    </textPath>
+  </text>
+</svg>

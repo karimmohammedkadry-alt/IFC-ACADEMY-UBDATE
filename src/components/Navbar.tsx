@@ -11,14 +11,16 @@ import {
   Menu,
   X,
   AlertCircle,
-  Clock
+  Clock,
+  DollarSign,
+  History
 } from 'lucide-react';
 import { Logo } from './Logo';
 import { useAuth } from '../context/AuthContext';
 import { AppNotification } from '../types';
 import { api } from '../services/api';
 
-export type NavTab = 'dashboard' | 'players' | 'payments' | 'attendance' | 'settings' | 'player-profile';
+export type NavTab = 'dashboard' | 'players' | 'payments' | 'financial' | 'attendance' | 'activity-logs' | 'settings' | 'player-profile';
 
 interface NavbarProps {
   currentTab: NavTab;
@@ -68,10 +70,13 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onSelectTab, onSelec
   const navItems = [
     { id: 'dashboard' as NavTab, label: 'الرئيسية', shortLabel: 'الرئيسية', icon: LayoutDashboard },
     { id: 'players' as NavTab, label: 'اللاعبين', shortLabel: 'اللاعبين', icon: Users },
-    { id: 'payments' as NavTab, label: 'المدفوعات', shortLabel: 'المدفوعات', icon: CreditCard },
+    { id: 'payments' as NavTab, label: 'المدفوعات والاشتراكات', shortLabel: 'المدفوعات', icon: CreditCard },
+    { id: 'financial' as NavTab, label: 'المالية والتقارير', shortLabel: 'المالية', icon: DollarSign },
     { id: 'attendance' as NavTab, label: 'الحضور والغياب', shortLabel: 'الحضور', icon: CalendarCheck },
+    { id: 'activity-logs' as NavTab, label: 'سجل النشاطات والنسخ', shortLabel: 'النشاطات', icon: History },
     { id: 'settings' as NavTab, label: 'الإعدادات', shortLabel: 'الإعدادات', icon: Settings }
   ];
+
 
   const unreadCount = notifications.filter(n => !n.read).length;
 

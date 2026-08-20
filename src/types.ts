@@ -110,3 +110,81 @@ export interface AppNotification {
   date: string;
   read: boolean;
 }
+
+export type FinancialTransactionType = 'income' | 'expense' | 'salary' | 'withdrawal';
+
+export interface FinancialTransaction {
+  id: string;
+  type: FinancialTransactionType;
+  amount: number;
+  date: string;
+  description: string;
+  category?: string;
+  coachName?: string;
+  notes?: string;
+  userId?: string;
+  paymentId?: string;
+  createdAt: string;
+}
+
+export interface ActivityLog {
+  id: string;
+  userId?: string;
+  action: string;
+  entityType: string;
+  entityId?: string;
+  description: string;
+  timestamp: string;
+  status: 'SUCCESS' | 'FAILED' | 'PENDING';
+}
+
+export interface BackupRecord {
+  id: string;
+  type: 'daily' | 'manual';
+  startedAt: string;
+  completedAt?: string;
+  status: 'RUNNING' | 'SUCCESS' | 'FAILED';
+  filename: string;
+  googleDriveFileId?: string;
+  fileSize?: string;
+  error?: string;
+  createdAt: string;
+}
+
+export interface Invoice {
+  id: string;
+  invoiceNumber: string;
+  paymentId?: string;
+  playerId: string;
+  playerName: string;
+  membershipCode?: string;
+  amount: number;
+  paymentMethod: PaymentMethod;
+  date: string;
+  description: string;
+  academyName: string;
+  createdAt: string;
+}
+
+export interface SyncQueueItem {
+  id: string;
+  entity: string;
+  entityId: string;
+  operation: string;
+  status: 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'FAILED';
+  retryCount: number;
+  lastAttempt?: string;
+  error?: string;
+  createdAt: string;
+  syncedAt?: string;
+}
+
+export interface FinancialOverviewStats {
+  totalRevenue: number;
+  totalExpenses: number;
+  totalSalaries: number;
+  netBalance: number;
+  paymentsCount: number;
+  transactionsCount: number;
+}
+

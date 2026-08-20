@@ -51,6 +51,63 @@ export function generateToken(user: AdminUser): string {
   return `${payloadB64}.${signature}`;
 }
 
+// In-memory rate limiting map for login attempts
+interface LoginAttemptRecord {
+  count: number;
+  firstAttemptAt: number;
+  lockedUntil?: number;
+}
+
+const loginAttempts = new Map<string, LoginAttemptRecord>();
+
+export function checkLoginRateLimit(identifier: string): { allowed: boolean; remainingMinutes?: number } {
+  const key = identifier.toLowerCase().trim();
+  const record = loginAttempts.get(key);
+  const now = Date.now();
+
+  if (!record) {
+    return { allowed: true };
+  }
+
+  // Check if currently locked
+  if (record.lockedUntil && record.lockedUntil > now) {
+    const remainingMinutes = Math.ceil((record.lockedUntil - now) / (60 * 1000));
+    return { allowed: false, remainingMinutes };
+  }
+
+  // Reset if window has passed (15 mins)
+  if (now - record.firstAttemptAt > 15 * 60 * 1000) {
+    loginAttempts.delete(key);
+    return { allowed: true };
+  }
+
+  return { allowed: true };
+}
+
+export function recordFailedLogin(identifier: string): { locked: boolean; remainingMinutes?: number } {
+  const key = identifier.toLowerCase().trim();
+  const now = Date.now();
+  const record = loginAttempts.get(key);
+
+  if (!record || (now - record.firstAttemptAt > 15 * 60 * 1000)) {
+    loginAttempts.set(key, { count: 1, firstAttemptAt: now });
+    return { locked: false };
+  }
+
+  record.count += 1;
+  if (record.count >= 5) {
+    record.lockedUntil = now + 15 * 60 * 1000; // 15 minutes lockout
+    return { locked: true, remainingMinutes: 15 };
+  }
+
+  return { locked: false };
+}
+
+export function resetLoginAttempts(identifier: string): void {
+  const key = identifier.toLowerCase().trim();
+  loginAttempts.delete(key);
+}
+
 export function verifyToken(token: string): TokenPayload | null {
   try {
     if (!token || typeof token !== 'string') return null;

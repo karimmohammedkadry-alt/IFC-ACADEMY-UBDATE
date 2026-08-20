@@ -155,7 +155,47 @@ CREATE TABLE IF NOT EXISTS settings (
   currency TEXT DEFAULT 'EGP',
   "defaultMonthlyFee" NUMERIC DEFAULT 500,
   "adminNotifications" BOOLEAN DEFAULT true
+);
+
+-- 6. جدول المعاملات المالية والمصروفات والرواتب (Financial Transactions)
+CREATE TABLE IF NOT EXISTS financial_transactions (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL CHECK (type IN ('income', 'expense', 'salary', 'withdrawal')),
+  amount NUMERIC NOT NULL,
+  date TEXT NOT NULL,
+  description TEXT NOT NULL,
+  category TEXT,
+  "coachName" TEXT,
+  notes TEXT,
+  "paymentId" TEXT REFERENCES payments(id) ON DELETE SET NULL,
+  "createdAt" TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 7. جدول سجل النشاطات والأمان (Activity & Audit Logs)
+CREATE TABLE IF NOT EXISTS activity_logs (
+  id TEXT PRIMARY KEY,
+  "userId" TEXT NOT NULL DEFAULT 'admin-1',
+  action TEXT NOT NULL,
+  "entityType" TEXT NOT NULL,
+  "entityId" TEXT,
+  description TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'SUCCESS',
+  timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 8. جدول سجل النسخ الاحتياطي (Backups Log)
+CREATE TABLE IF NOT EXISTS backups (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL DEFAULT 'daily',
+  "startedAt" TIMESTAMPTZ DEFAULT NOW(),
+  "completedAt" TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'SUCCESS',
+  filename TEXT NOT NULL,
+  "googleDriveFileId" TEXT,
+  "fileSize" TEXT,
+  "createdAt" TIMESTAMPTZ DEFAULT NOW()
 );`;
+
 
   const handleCopySql = () => {
     navigator.clipboard.writeText(supabaseSqlSchema);

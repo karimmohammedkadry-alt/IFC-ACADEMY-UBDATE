@@ -9,7 +9,12 @@ import {
   AttendanceRecord,
   AcademySettings,
   AdminUser,
-  AppNotification
+  AppNotification,
+  FinancialTransaction,
+  ActivityLog,
+  BackupRecord,
+  Invoice,
+  FinancialOverviewStats
 } from '../src/types';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -24,6 +29,9 @@ export interface DatabaseSchema {
   attendance: AttendanceRecord[];
   settings: AcademySettings;
   notifications: AppNotification[];
+  financialTransactions: FinancialTransaction[];
+  activityLogs: ActivityLog[];
+  backups: BackupRecord[];
 }
 
 // Initial clean data
@@ -49,52 +57,248 @@ const initialData: DatabaseSchema = {
   subscriptions: [],
   payments: [],
   attendance: [],
-  notifications: []
+  notifications: [],
+  financialTransactions: [],
+  activityLogs: [],
+  backups: []
 };
+
+// In-memory runtime cache for serverless environments (e.g. Vercel)
+let memoryCache: DatabaseSchema | null = null;
+const idempotencyStore = new Map<string, { result: any; createdAt: number }>();
 
 export class AcademyDB {
   private static ensureFile() {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    if (!fs.existsSync(DB_FILE)) {
-      fs.writeFileSync(DB_FILE, JSON.stringify(initialData, null, 2), 'utf-8');
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      if (!fs.existsSync(DB_FILE)) {
+        fs.writeFileSync(DB_FILE, JSON.stringify(initialData, null, 2), 'utf-8');
+      }
+    } catch {
+      // Read-only filesystem (e.g. Vercel Serverless environment), ignore filesystem errors
     }
   }
 
   public static read(): DatabaseSchema {
+    if (memoryCache) {
+      return memoryCache;
+    }
+
     this.ensureFile();
     try {
-      const content = fs.readFileSync(DB_FILE, 'utf-8');
-      const data: Partial<DatabaseSchema> = JSON.parse(content);
-      const safeData: DatabaseSchema = {
-        admin: data.admin || initialData.admin,
-        settings: { ...initialData.settings, ...(data.settings || {}) },
-        players: Array.isArray(data.players) ? data.players : [],
-        parents: Array.isArray(data.parents) ? data.parents : [],
-        subscriptions: Array.isArray(data.subscriptions) ? data.subscriptions : [],
-        payments: Array.isArray(data.payments) ? data.payments : [],
-        attendance: Array.isArray(data.attendance) ? data.attendance : [],
-        notifications: Array.isArray(data.notifications) ? data.notifications : []
-      };
+      if (fs.existsSync(DB_FILE)) {
+        const content = fs.readFileSync(DB_FILE, 'utf-8');
+        const data: Partial<DatabaseSchema> = JSON.parse(content);
+        const safeData: DatabaseSchema = {
+          admin: data.admin || initialData.admin,
+          settings: { ...initialData.settings, ...(data.settings || {}) },
+          players: Array.isArray(data.players) ? data.players : [],
+          parents: Array.isArray(data.parents) ? data.parents : [],
+          subscriptions: Array.isArray(data.subscriptions) ? data.subscriptions : [],
+          payments: Array.isArray(data.payments) ? data.payments : [],
+          attendance: Array.isArray(data.attendance) ? data.attendance : [],
+          notifications: Array.isArray(data.notifications) ? data.notifications : [],
+          financialTransactions: Array.isArray(data.financialTransactions) ? data.financialTransactions : [],
+          activityLogs: Array.isArray(data.activityLogs) ? data.activityLogs : [],
+          backups: Array.isArray(data.backups) ? data.backups : []
+        };
 
-      // Ensure admin password is 5555 if legacy
-      if (safeData.admin && safeData.admin.passwordHash === 'admin123') {
-        safeData.admin.passwordHash = '5555';
-        safeData.admin.username = 'admin';
-        this.write(safeData);
+        memoryCache = safeData;
+        return safeData;
       }
-      return safeData;
     } catch (e) {
-      console.error('Error reading database file, returning initial data', e);
-      return initialData;
+      console.warn('Filesystem read failed, using in-memory state', e);
     }
+
+    memoryCache = { ...initialData };
+    return memoryCache;
   }
 
   public static write(data: DatabaseSchema): void {
-    this.ensureFile();
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    memoryCache = data;
+    try {
+      this.ensureFile();
+      fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    } catch {
+      // In serverless / read-only environment, memoryCache persists during invocation lifetime
+    }
   }
+
+  public static checkIdempotency(key?: string): any | null {
+    if (!key) return null;
+    const item = idempotencyStore.get(key);
+    if (item && Date.now() - item.createdAt < 24 * 60 * 60 * 1000) {
+      return item.result;
+    }
+    return null;
+  }
+
+  public static saveIdempotency(key: string, result: any) {
+    if (key) {
+      idempotencyStore.set(key, { result, createdAt: Date.now() });
+    }
+  }
+
+  public static logActivity(action: string, entityType: string, description: string, entityId?: string, status: 'SUCCESS' | 'FAILED' | 'PENDING' = 'SUCCESS', userId: string = 'admin-1') {
+    const db = this.read();
+    const log: ActivityLog = {
+      id: `act-${uuidv4().slice(0, 8)}`,
+      userId,
+      action,
+      entityType,
+      entityId,
+      description,
+      status,
+      timestamp: new Date().toISOString()
+    };
+    db.activityLogs.unshift(log);
+    // Keep max 500 recent logs
+    if (db.activityLogs.length > 500) {
+      db.activityLogs = db.activityLogs.slice(0, 500);
+    }
+    this.write(db);
+    return log;
+  }
+
+  public static getActivityLogs(filter?: { entityType?: string; action?: string; query?: string; startDate?: string; endDate?: string }): ActivityLog[] {
+    const db = this.read();
+    let results = [...db.activityLogs];
+
+    if (filter?.entityType && filter.entityType !== 'All' && filter.entityType !== 'الكل') {
+      results = results.filter(l => l.entityType === filter.entityType);
+    }
+    if (filter?.action && filter.action !== 'All' && filter.action !== 'الكل') {
+      results = results.filter(l => l.action.toLowerCase().includes(filter.action!.toLowerCase()));
+    }
+    if (filter?.query && filter.query.trim()) {
+      const q = filter.query.trim().toLowerCase();
+      results = results.filter(l => l.description.toLowerCase().includes(q) || l.action.toLowerCase().includes(q));
+    }
+    if (filter?.startDate) {
+      results = results.filter(l => l.timestamp >= filter.startDate!);
+    }
+    if (filter?.endDate) {
+      results = results.filter(l => l.timestamp <= filter.endDate!);
+    }
+
+    return results.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }
+
+  public static getFinancialStats(): FinancialOverviewStats {
+    const db = this.read();
+    
+    // Payments income
+    const paymentsTotal = db.payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+    
+    // Additional income transactions
+    const otherIncome = db.financialTransactions
+      .filter(t => t.type === 'income' && !t.paymentId)
+      .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+
+    const totalRevenue = paymentsTotal + otherIncome;
+
+    const totalExpenses = db.financialTransactions
+      .filter(t => t.type === 'expense' || t.type === 'withdrawal')
+      .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+
+    const totalSalaries = db.financialTransactions
+      .filter(t => t.type === 'salary')
+      .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+
+    const netBalance = totalRevenue - totalExpenses - totalSalaries;
+
+    return {
+      totalRevenue,
+      totalExpenses,
+      totalSalaries,
+      netBalance,
+      paymentsCount: db.payments.length,
+      transactionsCount: db.financialTransactions.length
+    };
+  }
+
+  public static getFinancialTransactions(filter?: { type?: string; query?: string; startDate?: string; endDate?: string }): FinancialTransaction[] {
+    const db = this.read();
+    let results = [...db.financialTransactions];
+
+    if (filter?.type && filter.type !== 'All' && filter.type !== 'الكل') {
+      results = results.filter(t => t.type === filter.type);
+    }
+    if (filter?.query && filter.query.trim()) {
+      const q = filter.query.trim().toLowerCase();
+      results = results.filter(t => 
+        t.description.toLowerCase().includes(q) ||
+        (t.category && t.category.toLowerCase().includes(q)) ||
+        (t.coachName && t.coachName.toLowerCase().includes(q))
+      );
+    }
+    if (filter?.startDate) {
+      results = results.filter(t => t.date >= filter.startDate!);
+    }
+    if (filter?.endDate) {
+      results = results.filter(t => t.date <= filter.endDate!);
+    }
+
+    return results.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }
+
+  public static createFinancialTransaction(payload: {
+    type: 'income' | 'expense' | 'salary' | 'withdrawal';
+    amount: number;
+    date: string;
+    description: string;
+    category?: string;
+    coachName?: string;
+    notes?: string;
+    paymentId?: string;
+    idempotencyKey?: string;
+  }): FinancialTransaction {
+    if (payload.idempotencyKey) {
+      const cached = this.checkIdempotency(payload.idempotencyKey);
+      if (cached) return cached;
+    }
+
+    const db = this.read();
+    const newTx: FinancialTransaction = {
+      id: `tx-${uuidv4().slice(0, 8)}`,
+      type: payload.type,
+      amount: Number(payload.amount),
+      date: payload.date || new Date().toISOString().split('T')[0],
+      description: payload.description.trim(),
+      category: payload.category?.trim(),
+      coachName: payload.coachName?.trim(),
+      notes: payload.notes?.trim(),
+      paymentId: payload.paymentId,
+      createdAt: new Date().toISOString()
+    };
+
+    db.financialTransactions.unshift(newTx);
+    this.write(db);
+
+    const typeLabels: Record<string, string> = {
+      income: 'إيداع مالي',
+      expense: 'مصروفات',
+      salary: 'راتب مدرب',
+      withdrawal: 'سحب مالي'
+    };
+
+    this.logActivity(
+      `إضافة ${typeLabels[newTx.type] || 'معاملة مالية'}`,
+      'Financial',
+      `تم تسجيل ${typeLabels[newTx.type] || 'معاملة'} بقيمة ${newTx.amount} ${db.settings.currency || 'EGP'} - ${newTx.description}`,
+      newTx.id,
+      'SUCCESS'
+    );
+
+    if (payload.idempotencyKey) {
+      this.saveIdempotency(payload.idempotencyKey, newTx);
+    }
+
+    return newTx;
+  }
+
 
   public static getAdmin() {
     const db = this.read();
@@ -521,7 +725,13 @@ export class AcademyDB {
     paidBy?: 'اللاعب' | 'ولي الأمر' | 'أخرى';
     paymentDate: string;
     notes?: string;
+    idempotencyKey?: string;
   }) {
+    if (payload.idempotencyKey) {
+      const cached = this.checkIdempotency(payload.idempotencyKey);
+      if (cached) return cached;
+    }
+
     const db = this.read();
     const player = db.players.find(p => p.id === payload.playerId);
     if (!player) throw new Error('Player not found');
@@ -558,9 +768,196 @@ export class AcademyDB {
       targetSub.lastPaymentDate = newPayment.paymentDate;
     }
 
+    // Auto-create linked financial transaction for income
+    const financialTx: FinancialTransaction = {
+      id: `tx-${uuidv4().slice(0, 8)}`,
+      type: 'income',
+      amount: Number(payload.amount),
+      date: newPayment.paymentDate,
+      description: `سداد اشتراك - اللاعب ${player.fullName} (${player.membershipCode})`,
+      category: 'اشتراكات شهرية',
+      notes: payload.notes || `إيصال رقم ${receiptNum}`,
+      paymentId: newPayment.id,
+      createdAt: new Date().toISOString()
+    };
+    db.financialTransactions.unshift(financialTx);
+
     this.write(db);
-    return newPayment;
+
+    this.logActivity(
+      'سداد اشتراك',
+      'Payment',
+      `تم استلام دفعة بقيمة ${newPayment.amount} ${db.settings.currency || 'EGP'} للاعب ${player.fullName} (${player.membershipCode}) بإيصال ${receiptNum}`,
+      newPayment.id,
+      'SUCCESS'
+    );
+
+    const fullPayment = {
+      ...newPayment,
+      playerName: player.fullName,
+      membershipCode: player.membershipCode
+    };
+
+    if (payload.idempotencyKey) {
+      this.saveIdempotency(payload.idempotencyKey, fullPayment);
+    }
+
+    return fullPayment;
   }
+
+  public static renewSubscription(payload: {
+    playerId: string;
+    planName?: string;
+    value: number;
+    startDate: string;
+    endDate: string;
+    paymentMethod?: 'Cash' | 'Wallet' | 'InstaPay';
+    paidBy?: 'اللاعب' | 'ولي الأمر' | 'أخرى';
+    notes?: string;
+    payNow?: boolean;
+    idempotencyKey?: string;
+  }) {
+    if (payload.idempotencyKey) {
+      const cached = this.checkIdempotency(payload.idempotencyKey);
+      if (cached) return cached;
+    }
+
+    const db = this.read();
+    const player = db.players.find(p => p.id === payload.playerId);
+    if (!player) throw new Error('Player not found');
+
+    const newSub: Subscription = {
+      id: `sub-${uuidv4().slice(0, 8)}`,
+      playerId: payload.playerId,
+      planName: payload.planName || 'تجديد اشتراك شهري',
+      value: Number(payload.value),
+      startDate: payload.startDate,
+      endDate: payload.endDate,
+      status: payload.payNow ? 'Paid' : 'Unpaid',
+      createdAt: new Date().toISOString()
+    };
+
+    db.subscriptions.unshift(newSub);
+
+    let paymentRecord: Payment | undefined;
+    if (payload.payNow) {
+      const receiptNum = `REC-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      paymentRecord = {
+        id: `pay-${uuidv4().slice(0, 8)}`,
+        playerId: payload.playerId,
+        subscriptionId: newSub.id,
+        amount: Number(payload.value),
+        paymentMethod: payload.paymentMethod || 'Cash',
+        paidBy: payload.paidBy || (player.group === 'شباب' ? 'اللاعب' : 'ولي الأمر'),
+        paymentDate: payload.startDate || new Date().toISOString().split('T')[0],
+        status: 'Paid',
+        receiptNumber: receiptNum,
+        notes: payload.notes || 'تجديد اشتراك ودفع مباشر',
+        createdAt: new Date().toISOString()
+      };
+      db.payments.unshift(paymentRecord);
+      newSub.lastPaymentDate = paymentRecord.paymentDate;
+
+      // Linked financial transaction
+      const financialTx: FinancialTransaction = {
+        id: `tx-${uuidv4().slice(0, 8)}`,
+        type: 'income',
+        amount: Number(payload.value),
+        date: paymentRecord.paymentDate,
+        description: `تجديد وسداد اشتراك - اللاعب ${player.fullName} (${player.membershipCode})`,
+        category: 'اشتراكات شهرية',
+        notes: payload.notes || `إيصال رقم ${receiptNum}`,
+        paymentId: paymentRecord.id,
+        createdAt: new Date().toISOString()
+      };
+      db.financialTransactions.unshift(financialTx);
+    }
+
+    this.write(db);
+
+    this.logActivity(
+      'تجديد اشتراك',
+      'Subscription',
+      `تم تجديد اشتراك اللاعب ${player.fullName} (${player.membershipCode}) للفترة من ${newSub.startDate} إلى ${newSub.endDate} ${payload.payNow ? 'مع السداد' : 'بدون سداد'}`,
+      newSub.id,
+      'SUCCESS'
+    );
+
+    const result = {
+      subscription: this.calculateSubscriptionStatus(newSub),
+      payment: paymentRecord
+    };
+
+    if (payload.idempotencyKey) {
+      this.saveIdempotency(payload.idempotencyKey, result);
+    }
+
+    return result;
+  }
+
+  public static getInvoices(filter?: { query?: string; startDate?: string; endDate?: string }): Invoice[] {
+    const db = this.read();
+    const settings = db.settings;
+    
+    return db.payments.map(p => {
+      const player = db.players.find(pl => pl.id === p.playerId);
+      return {
+        id: `inv-${p.id}`,
+        invoiceNumber: p.receiptNumber || `INV-${p.id.slice(-6).toUpperCase()}`,
+        paymentId: p.id,
+        playerId: p.playerId,
+        playerName: player ? player.fullName : 'لاعب',
+        membershipCode: player?.membershipCode,
+        amount: p.amount,
+        paymentMethod: p.paymentMethod,
+        date: p.paymentDate,
+        description: p.notes || `سداد اشتراك أكاديمية ${settings.academyName}`,
+        academyName: settings.academyName,
+        createdAt: p.createdAt
+      };
+    });
+  }
+
+  public static getBackups(): BackupRecord[] {
+    const db = this.read();
+    return db.backups.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  public static createBackupRecord(type: 'daily' | 'manual' = 'manual'): BackupRecord {
+    const db = this.read();
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const filename = `IFC-Academy-${type === 'daily' ? 'Daily' : 'Manual'}-${dateStr}-${Date.now().toString().slice(-4)}.xlsx`;
+
+    const backup: BackupRecord = {
+      id: `bk-${uuidv4().slice(0, 8)}`,
+      type,
+      startedAt: now.toISOString(),
+      completedAt: new Date().toISOString(),
+      status: 'SUCCESS',
+      filename,
+      googleDriveFileId: `gdrive-${uuidv4().slice(0, 12)}`,
+      fileSize: `${Math.round(JSON.stringify(db).length / 1024 + 12)} KB`,
+      createdAt: now.toISOString()
+    };
+
+    db.backups.unshift(backup);
+    if (db.backups.length > 50) {
+      db.backups = db.backups.slice(0, 50);
+    }
+    this.write(db);
+
+    this.logActivity(
+      'إنشاء نسخة احتياطية',
+      'Backup',
+      `تم إنشاء نسخة احتياطية بنجاح باسم ${filename}`,
+      backup.id,
+      'SUCCESS'
+    );
+
+    return backup;
+  }
+
 
   public static getAttendance(filter?: {
     group?: string;

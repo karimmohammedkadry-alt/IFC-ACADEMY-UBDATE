@@ -66,14 +66,25 @@ export class AcademyDB {
     this.ensureFile();
     try {
       const content = fs.readFileSync(DB_FILE, 'utf-8');
-      const data: DatabaseSchema = JSON.parse(content);
+      const data: Partial<DatabaseSchema> = JSON.parse(content);
+      const safeData: DatabaseSchema = {
+        admin: data.admin || initialData.admin,
+        settings: { ...initialData.settings, ...(data.settings || {}) },
+        players: Array.isArray(data.players) ? data.players : [],
+        parents: Array.isArray(data.parents) ? data.parents : [],
+        subscriptions: Array.isArray(data.subscriptions) ? data.subscriptions : [],
+        payments: Array.isArray(data.payments) ? data.payments : [],
+        attendance: Array.isArray(data.attendance) ? data.attendance : [],
+        notifications: Array.isArray(data.notifications) ? data.notifications : []
+      };
+
       // Ensure admin password is 5555 if legacy
-      if (data.admin && data.admin.passwordHash === 'admin123') {
-        data.admin.passwordHash = '5555';
-        data.admin.username = 'admin';
-        this.write(data);
+      if (safeData.admin && safeData.admin.passwordHash === 'admin123') {
+        safeData.admin.passwordHash = '5555';
+        safeData.admin.username = 'admin';
+        this.write(safeData);
       }
-      return data;
+      return safeData;
     } catch (e) {
       console.error('Error reading database file, returning initial data', e);
       return initialData;
@@ -625,60 +636,72 @@ export class AcademyDB {
   }
 
   public static getNotifications(): AppNotification[] {
-    const db = this.read();
-    const today = new Date().toISOString().split('T')[0];
-    const liveNotifs: AppNotification[] = [];
+    try {
+      const db = this.read();
+      const liveNotifs: AppNotification[] = [];
+      const players = db.players || [];
+      const subscriptions = db.subscriptions || [];
+      const dbNotifs = db.notifications || [];
+      const currency = db.settings?.currency || 'EGP';
 
-    for (const player of db.players) {
-      if (player.status !== 'Active') continue;
-      const rawSub = db.subscriptions
-        .filter(s => s.playerId === player.id)
-        .sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime())[0];
+      for (const player of players) {
+        if (!player || player.status !== 'Active') continue;
+        const playerSubs = subscriptions
+          .filter(s => s && s.playerId === player.id)
+          .sort((a, b) => new Date(b.startDate || 0).getTime() - new Date(a.startDate || 0).getTime());
+        
+        const rawSub = playerSubs[0];
 
-      if (rawSub) {
-        const sub = this.calculateSubscriptionStatus(rawSub);
-        if (sub.status === 'Expired') {
-          liveNotifs.push({
-            id: `exp-${player.id}`,
-            type: 'expired',
-            title: 'اشتراك منتهي',
-            message: `اشتراك اللاعب ${player.fullName} (${player.membershipCode}) منتهي بتاريخ ${sub.endDate}`,
-            playerId: player.id,
-            date: sub.endDate,
-            read: false
-          });
-        } else if (sub.status === 'ExpiringSoon') {
-          liveNotifs.push({
-            id: `soon-${player.id}`,
-            type: 'expiring_soon',
-            title: 'تنبيه: اشتراك يوشك على الانتهاء',
-            message: `اشتراك اللاعب ${player.fullName} (${player.membershipCode}) ينتهي خلال ${sub.daysRemaining} أيام (${sub.endDate})`,
-            playerId: player.id,
-            date: sub.endDate,
-            read: false
-          });
-        } else if (sub.status === 'Unpaid') {
-          liveNotifs.push({
-            id: `unp-${player.id}`,
-            type: 'unpaid',
-            title: 'اشتراك غير مسدد',
-            message: `اللاعب ${player.fullName} (${player.membershipCode}) لم يسدد اشتراك الشهر بقيمة ${sub.value} ${db.settings.currency}`,
-            playerId: player.id,
-            date: sub.startDate,
-            read: false
-          });
+        if (rawSub) {
+          const sub = this.calculateSubscriptionStatus(rawSub);
+          const memCode = player.membershipCode || '';
+          if (sub.status === 'Expired') {
+            liveNotifs.push({
+              id: `exp-${player.id}`,
+              type: 'expired',
+              title: 'اشتراك منتهي',
+              message: `اشتراك اللاعب ${player.fullName} (${memCode}) منتهي بتاريخ ${sub.endDate}`,
+              playerId: player.id,
+              date: sub.endDate,
+              read: false
+            });
+          } else if (sub.status === 'ExpiringSoon') {
+            liveNotifs.push({
+              id: `soon-${player.id}`,
+              type: 'expiring_soon',
+              title: 'تنبيه: اشتراك يوشك على الانتهاء',
+              message: `اشتراك اللاعب ${player.fullName} (${memCode}) ينتهي خلال ${sub.daysRemaining} أيام (${sub.endDate})`,
+              playerId: player.id,
+              date: sub.endDate,
+              read: false
+            });
+          } else if (sub.status === 'Unpaid') {
+            liveNotifs.push({
+              id: `unp-${player.id}`,
+              type: 'unpaid',
+              title: 'اشتراك غير مسدد',
+              message: `اللاعب ${player.fullName} (${memCode}) لم يسدد اشتراك الشهر بقيمة ${sub.value || 500} ${currency}`,
+              playerId: player.id,
+              date: sub.startDate,
+              read: false
+            });
+          }
         }
       }
-    }
 
-    const combined = [...liveNotifs, ...db.notifications];
-    const seen = new Set();
-    return combined.filter(n => {
-      const key = `${n.type}-${n.playerId || n.title}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+      const combined = [...liveNotifs, ...dbNotifs];
+      const seen = new Set();
+      return combined.filter(n => {
+        if (!n) return false;
+        const key = `${n.type}-${n.playerId || n.title}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    } catch (err) {
+      console.error('Error generating notifications', err);
+      return [];
+    }
   }
 
   public static getSettings() {

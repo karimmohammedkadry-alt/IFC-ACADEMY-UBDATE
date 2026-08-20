@@ -185,6 +185,17 @@ export const api = {
     });
   },
 
+  // Supabase Integration
+  getSupabaseStatus: async (): Promise<{ configured: boolean; supabaseUrl: string | null }> => {
+    return fetchJson(`${API_BASE}/supabase/status`);
+  },
+
+  syncWithSupabase: async (): Promise<{ success: boolean; message: string; results?: Record<string, string> }> => {
+    return fetchJson(`${API_BASE}/supabase/sync`, {
+      method: 'POST'
+    });
+  },
+
   // Export URLs
   exportPlayersUrl: '/api/export/players',
   exportPaymentsUrl: '/api/export/payments',

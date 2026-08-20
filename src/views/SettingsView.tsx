@@ -17,7 +17,15 @@ import {
   Users,
   CreditCard,
   CalendarCheck,
-  CheckCircle2
+  CheckCircle2,
+  Cloud,
+  Layers,
+  ArrowUpRight,
+  Code2,
+  Copy,
+  Check,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { Logo } from '../components/Logo';
 import { useAuth } from '../context/AuthContext';
@@ -65,11 +73,105 @@ export const SettingsView: React.FC = () => {
     totalRevenue: 0
   });
   const [isDownloadingReport, setIsDownloadingReport] = useState(false);
+  const [supabaseStatus, setSupabaseStatus] = useState<{ configured: boolean; supabaseUrl: string | null }>({
+    configured: false,
+    supabaseUrl: null
+  });
+  const [isSyncingSupabase, setIsSyncingSupabase] = useState(false);
+  const [showSqlSchema, setShowSqlSchema] = useState(false);
+  const [copiedSql, setCopiedSql] = useState(false);
+
+  const supabaseSqlSchema = `-- 1. جدول بيانات اللاعبين (Players Table)
+CREATE TABLE IF NOT EXISTS players (
+  id TEXT PRIMARY KEY,
+  "membershipCode" TEXT UNIQUE,
+  "nationalId" TEXT,
+  "fullName" TEXT NOT NULL,
+  phone TEXT,
+  "birthDate" TEXT,
+  age INTEGER,
+  "group" TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'Active',
+  notes TEXT,
+  parent JSONB,
+  "activeSubscription" JSONB,
+  "createdAt" TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 2. جدول الاشتراكات (Subscriptions Table)
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id TEXT PRIMARY KEY,
+  "playerId" TEXT REFERENCES players(id) ON DELETE CASCADE,
+  "playerName" TEXT,
+  "membershipCode" TEXT,
+  "group" TEXT,
+  "planName" TEXT,
+  value NUMERIC,
+  "startDate" TEXT,
+  "endDate" TEXT,
+  status TEXT DEFAULT 'Unpaid',
+  "daysRemaining" INTEGER,
+  "lastPaymentDate" TEXT,
+  "lastPaidBy" TEXT,
+  "createdAt" TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 3. جدول سجلات المدفوعات والتحصيل (Payments Table)
+CREATE TABLE IF NOT EXISTS payments (
+  id TEXT PRIMARY KEY,
+  "playerId" TEXT REFERENCES players(id) ON DELETE CASCADE,
+  "playerName" TEXT,
+  "membershipCode" TEXT,
+  "subscriptionId" TEXT,
+  amount NUMERIC NOT NULL,
+  "paymentMethod" TEXT DEFAULT 'Cash',
+  "paidBy" TEXT,
+  "paymentDate" TEXT NOT NULL,
+  status TEXT DEFAULT 'Paid',
+  notes TEXT,
+  "receiptNumber" TEXT UNIQUE,
+  "createdAt" TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 4. جدول الحضور والغياب (Attendance Table)
+CREATE TABLE IF NOT EXISTS attendance (
+  id TEXT PRIMARY KEY,
+  "playerId" TEXT REFERENCES players(id) ON DELETE CASCADE,
+  "playerName" TEXT,
+  "membershipCode" TEXT,
+  "group" TEXT NOT NULL,
+  date TEXT NOT NULL,
+  status TEXT NOT NULL,
+  notes TEXT,
+  "markedAt" TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 5. جدول إعدادات الأكاديمية (Settings Table)
+CREATE TABLE IF NOT EXISTS settings (
+  id TEXT PRIMARY KEY DEFAULT 'academy_settings',
+  "academyName" TEXT,
+  phone TEXT,
+  address TEXT,
+  currency TEXT DEFAULT 'EGP',
+  "defaultMonthlyFee" NUMERIC DEFAULT 500,
+  "adminNotifications" BOOLEAN DEFAULT true
+);`;
+
+  const handleCopySql = () => {
+    navigator.clipboard.writeText(supabaseSqlSchema);
+    setCopiedSql(true);
+    success('تم نسخ كود SQL لإنشاء جداول Supabase بنجاح');
+    setTimeout(() => setCopiedSql(false), 2500);
+  };
 
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const s = await api.getSettings();
+        const [s, sbStatus] = await Promise.all([
+          api.getSettings(),
+          api.getSupabaseStatus().catch(() => ({ configured: false, supabaseUrl: null }))
+        ]);
+        setSupabaseStatus(sbStatus);
         setAcademyName(s.academyName || 'IFC ACADEMY');
         setAcademyPhone(s.phone || '');
         setAcademyAddress(s.address || '');
@@ -309,6 +411,22 @@ export const SettingsView: React.FC = () => {
       success('تم تصدير النسخة الاحتياطية المتكاملة لقاعدة البيانات بنجاح');
     } catch (err) {
       error('حدث خطأ أثناء تصدير النسخة الاحتياطية');
+    }
+  };
+
+  const handleSyncWithSupabase = async () => {
+    setIsSyncingSupabase(true);
+    try {
+      const res = await api.syncWithSupabase();
+      if (res.success) {
+        success(res.message || 'تمت مزامنة البيانات مع Supabase بنجاح');
+      } else {
+        error(res.message || 'فشلت المزامنة');
+      }
+    } catch (err: any) {
+      error(err.message || 'تأكد من ضبط SUPABASE_URL و SUPABASE_ANON_KEY في الإعدادات');
+    } finally {
+      setIsSyncingSupabase(false);
     }
   };
 
@@ -656,6 +774,95 @@ export const SettingsView: React.FC = () => {
               </button>
             </div>
           </form>
+        </div>
+
+        {/* SECTION 4: Supabase Cloud Database Integration */}
+        <div className="bg-[#0a0a0a] border border-[#1f1f23] rounded-2xl p-6 sm:p-8 shadow-xl">
+          <div className="flex items-center gap-3 pb-6 border-b border-[#1f1f23] mb-6">
+            <div className="w-10 h-10 rounded-xl bg-emerald-400/10 border border-emerald-400/20 flex items-center justify-center text-emerald-400">
+              <Cloud className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                <span>الربط السحابي مع Supabase Database</span>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${supabaseStatus.configured ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'}`}>
+                  {supabaseStatus.configured ? 'متصل وجاهز للمزامنة' : 'في انتظار ضبط المفاتيح'}
+                </span>
+              </h2>
+              <p className="text-xs text-zinc-400">تخزين ومزامنة بيانات الأكاديمية (اللاعبين، الاشتراكات، وسجلات الحضور) على مشروعك في Supabase</p>
+            </div>
+          </div>
+
+          <div className="p-5 bg-[#050505] border border-[#1f1f23] rounded-2xl flex flex-col md:flex-row items-center justify-between gap-6">
+            <div className="space-y-2 text-right">
+              <div className="flex items-center gap-2 text-sm font-bold text-white">
+                <Layers className="w-4 h-4 text-emerald-400" />
+                <span>حالة الربط مع مشروع Supabase الخاص بك</span>
+              </div>
+              <p className="text-xs text-zinc-400 leading-relaxed max-w-xl">
+                {supabaseStatus.configured 
+                  ? 'تم العثور على إعدادات Supabase في بيئة العمل. يمكنك الضغط على زر المزامنة لنقل كافة جداول وسجلات الأكاديمية تلقائياً إلى مشروعك السحابي.'
+                  : 'لتفعيل الربط المباشر مع مشروعك في Supabase، يرجى إضافة المتغيرات SUPABASE_URL و SUPABASE_ANON_KEY في إعدادات المنصة (Secrets & Environment Variables).'}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={handleSyncWithSupabase}
+                disabled={isSyncingSupabase}
+                className="flex items-center gap-2 px-5 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs sm:text-sm cursor-pointer shadow-lg shadow-emerald-500/20 transition-all active:scale-95 disabled:opacity-50"
+              >
+                <RefreshCw className={`w-4 h-4 ${isSyncingSupabase ? 'animate-spin' : ''}`} />
+                <span>{isSyncingSupabase ? 'جاري المزامنة...' : 'مزامنة فورية مع Supabase'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* SQL Tables Schema Viewer & Quick Copy */}
+          <div className="mt-6 pt-6 border-t border-[#1f1f23]">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+              <button
+                type="button"
+                onClick={() => setShowSqlSchema(!showSqlSchema)}
+                className="flex items-center gap-2 text-sm font-bold text-emerald-400 hover:text-emerald-300 transition-colors text-right cursor-pointer"
+              >
+                <Code2 className="w-4 h-4" />
+                <span>عرض استعلامات SQL لإنشاء جداول قاعدة البيانات في Supabase</span>
+                {showSqlSchema ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCopySql}
+                className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#151518] hover:bg-[#202024] text-zinc-200 hover:text-white border border-[#27272a] text-xs font-bold transition-all cursor-pointer w-fit"
+              >
+                {copiedSql ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-400">تم النسخ بنجاح!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5 text-zinc-400" />
+                    <span>نسخ كود إنشاء الجداول (SQL)</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {showSqlSchema && (
+              <div className="relative rounded-xl overflow-hidden border border-[#1f1f23] bg-[#050505] p-4 text-left dir-ltr">
+                <div className="flex justify-between items-center pb-2 mb-2 border-b border-[#1f1f23] text-xs text-zinc-500 font-mono">
+                  <span>Supabase SQL Editor Script</span>
+                  <span>PostgreSQL DDL</span>
+                </div>
+                <pre className="text-xs text-zinc-300 font-mono overflow-x-auto whitespace-pre p-2 max-h-80 custom-scrollbar">
+                  {supabaseSqlSchema}
+                </pre>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

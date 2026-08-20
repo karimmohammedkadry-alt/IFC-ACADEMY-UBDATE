@@ -275,6 +275,65 @@ async function startServer() {
     }
   });
 
+  // ==================== SUPABASE CLOUD SYNC & STATUS ROUTES ====================
+  app.get('/api/supabase/status', (req: Request, res: Response) => {
+    const isConfigured = Boolean(process.env.SUPABASE_URL && (process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY));
+    return res.json({
+      configured: isConfigured,
+      supabaseUrl: process.env.SUPABASE_URL ? process.env.SUPABASE_URL.replace(/(https?:\/\/)([^.]+)(.*)/, '$1***$3') : null
+    });
+  });
+
+  app.post('/api/supabase/sync', async (req: Request, res: Response) => {
+    try {
+      const { getSupabase } = await import('./server/supabase');
+      const supabase = getSupabase();
+      if (!supabase) {
+        return res.status(400).json({
+          error: 'يرجى ضبط SUPABASE_URL و SUPABASE_ANON_KEY في متغيرات البيئة (Settings/Secrets)'
+        });
+      }
+
+      const dbData = AcademyDB.read();
+
+      // Upsert into Supabase tables if they exist
+      const results: Record<string, string> = {};
+
+      if (dbData.players.length > 0) {
+        const { error: pErr } = await supabase.from('players').upsert(dbData.players as any);
+        results.players = pErr ? `ملاحظة: ${pErr.message}` : 'تم المزامنة بنجاح';
+      }
+
+      if (dbData.subscriptions.length > 0) {
+        const { error: sErr } = await supabase.from('subscriptions').upsert(dbData.subscriptions as any);
+        results.subscriptions = sErr ? `ملاحظة: ${sErr.message}` : 'تم المزامنة بنجاح';
+      }
+
+      if (dbData.payments.length > 0) {
+        const { error: payErr } = await supabase.from('payments').upsert(dbData.payments as any);
+        results.payments = payErr ? `ملاحظة: ${payErr.message}` : 'تم المزامنة بنجاح';
+      }
+
+      if (dbData.attendance.length > 0) {
+        const { error: attErr } = await supabase.from('attendance').upsert(dbData.attendance as any);
+        results.attendance = attErr ? `ملاحظة: ${attErr.message}` : 'تم المزامنة بنجاح';
+      }
+
+      if (dbData.settings) {
+        const { error: setErr } = await supabase.from('settings').upsert({ id: 'academy_settings', ...dbData.settings } as any);
+        results.settings = setErr ? `ملاحظة: ${setErr.message}` : 'تم المزامنة بنجاح';
+      }
+
+      return res.json({
+        success: true,
+        message: 'تمت محاولة مزامنة البيانات مع مشروع Supabase السحابي',
+        results
+      });
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message || 'فشل الاتصال بـ Supabase' });
+    }
+  });
+
   // ==================== EXCEL EXPORT ROUTES ====================
   app.get('/api/export/players', (req: Request, res: Response) => {
     try {

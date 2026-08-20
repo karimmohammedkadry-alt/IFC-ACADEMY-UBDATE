@@ -35,17 +35,23 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onSelectTab, onSelec
 
   // Load real notifications
   useEffect(() => {
+    let isMounted = true;
     const loadNotifs = async () => {
       try {
         const list = await api.getNotifications();
-        setNotifications(list);
+        if (isMounted && Array.isArray(list)) {
+          setNotifications(list);
+        }
       } catch (e) {
-        console.error('Failed to load notifications', e);
+        // Silently preserve current notifications during transient fetch issues
       }
     };
     loadNotifs();
     const interval = setInterval(loadNotifs, 30000);
-    return () => clearInterval(interval);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, []);
 
   // Close dropdowns on click outside

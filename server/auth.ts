@@ -12,20 +12,49 @@ export function hashPassword(password: string): string {
   return bcrypt.hashSync(password, salt);
 }
 
-export function verifyPassword(plainPassword: string, storedHash: string): boolean {
-  if (!plainPassword || !storedHash) return false;
+export function verifyPassword(plainPassword: string, storedHashOrPlain: string | null | undefined): boolean {
+  if (!plainPassword || !storedHashOrPlain) return false;
   
-  // If stored as bcrypt hash
-  if (storedHash.startsWith('$2a$') || storedHash.startsWith('$2b$') || storedHash.startsWith('$2y$')) {
+  const trimmedPlain = String(plainPassword).trim();
+  const stored = String(storedHashOrPlain).trim();
+
+  // 1. Direct plain text equality
+  if (trimmedPlain === stored) {
+    return true;
+  }
+
+  // 2. Bcrypt hash check
+  if (stored.startsWith('$2a$') || stored.startsWith('$2b$') || stored.startsWith('$2y$')) {
     try {
-      return bcrypt.compareSync(plainPassword, storedHash);
+      return bcrypt.compareSync(trimmedPlain, stored);
     } catch {
-      return false;
+      // ignore
     }
   }
-  
-  // Strict check
-  return plainPassword === storedHash;
+
+  // 3. Scrypt (Werkzeug / Python / Node standard format: scrypt:N:r:p$salt$hash)
+  if (stored.startsWith('scrypt:')) {
+    try {
+      const parts = stored.split('$');
+      if (parts.length === 3) {
+        const [params, salt, expectedHashHex] = parts;
+        const [_, N, r, p] = params.split(':').map(Number);
+        const derived = crypto.scryptSync(trimmedPlain, salt, expectedHashHex.length / 2 || 64, {
+          N: N || 32768,
+          r: r || 8,
+          p: p || 1,
+          maxmem: 128 * 1024 * 1024
+        });
+        if (derived.toString('hex') === expectedHashHex) {
+          return true;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return false;
 }
 
 export interface TokenPayload {

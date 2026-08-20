@@ -43,12 +43,58 @@ function getIdempotencyKey(req: Request): string | undefined {
 // ==================== HEALTH & DIAGNOSTICS ====================
 app.get('/api/health', (_req: Request, res: Response) => {
   res.json({
+    ok: true,
     status: 'ok',
     environment: process.env.NODE_ENV || 'development',
     timestamp: new Date().toISOString(),
     supabaseConfigured: isSupabaseConfigured(),
     googleConfigured: isGoogleConfigured()
   });
+});
+
+app.get('/api/supabase/status', async (_req: Request, res: Response) => {
+  const isConfigured = isSupabaseConfigured();
+  if (!isConfigured) {
+    return res.json({
+      connected: false,
+      configured: false,
+      message: 'Supabase credentials are not configured.'
+    });
+  }
+
+  try {
+    const supabase = getSupabase();
+    if (!supabase) {
+      return res.json({
+        connected: false,
+        configured: true,
+        message: 'Could not initialize Supabase client.'
+      });
+    }
+
+    const { count, error } = await supabase.from('users').select('*', { count: 'exact', head: true });
+    if (error) {
+      return res.status(500).json({
+        connected: false,
+        configured: true,
+        error: error.message
+      });
+    }
+
+    return res.json({
+      connected: true,
+      configured: true,
+      tables: ['users', 'players', 'attendance', 'payments', 'expenses', 'subscriptions'],
+      userCount: count ?? 0,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      connected: false,
+      configured: true,
+      error: err.message || 'Error checking Supabase status'
+    });
+  }
 });
 
 app.get('/api/diagnostics', async (_req: Request, res: Response) => {
@@ -59,7 +105,7 @@ app.get('/api/diagnostics', async (_req: Request, res: Response) => {
     try {
       const supabase = getSupabase();
       if (supabase) {
-        const { error } = await supabase.from('settings').select('count', { count: 'exact', head: true });
+        const { error } = await supabase.from('users').select('count', { count: 'exact', head: true });
         if (!error) {
           supabaseTest = { ok: true, message: 'متصل بنجاح مع Supabase PostgreSQL' };
         } else {

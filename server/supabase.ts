@@ -5,7 +5,8 @@ let dynamicUrl: string | null = null;
 let dynamicKey: string | null = null;
 
 export function setSupabaseConfig(url: string, key: string) {
-  dynamicUrl = url.trim();
+  let cleanUrl = url.trim().replace(/\/rest\/v1\/?$/, '').replace(/\/+$/, '');
+  dynamicUrl = cleanUrl;
   dynamicKey = key.trim();
   supabaseClient = createClient(dynamicUrl, dynamicKey, {
     auth: {
@@ -16,12 +17,14 @@ export function setSupabaseConfig(url: string, key: string) {
 }
 
 export function getSupabase(): SupabaseClient | null {
-  const supabaseUrl = dynamicUrl || process.env.SUPABASE_URL;
-  const supabaseKey = dynamicKey || process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const rawUrl = dynamicUrl || process.env.SUPABASE_URL;
+  const supabaseKey = dynamicKey || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
 
-  if (!supabaseUrl || !supabaseKey) {
+  if (!rawUrl || !supabaseKey) {
     return null;
   }
+
+  const supabaseUrl = rawUrl.trim().replace(/\/rest\/v1\/?$/, '').replace(/\/+$/, '');
 
   if (!supabaseClient) {
     supabaseClient = createClient(supabaseUrl, supabaseKey, {

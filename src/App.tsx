@@ -11,6 +11,7 @@ import { AddEditPlayerModal } from './views/AddEditPlayerModal';
 import { PaymentsView } from './views/PaymentsView';
 import { AttendanceView } from './views/AttendanceView';
 import { FinancialReportsView } from './views/FinancialReportsView';
+import { CoachesView } from './views/CoachesView';
 import { ActivityLogsView } from './views/ActivityLogsView';
 import { SettingsView } from './views/SettingsView';
 import { Footer } from './components/Footer';
@@ -21,7 +22,7 @@ const MainApp: React.FC = () => {
   const [isInitialBoot, setIsInitialBoot] = useState(true);
   const [currentTab, setCurrentTab] = useState<NavTab>(() => {
     const saved = localStorage.getItem('ifc_active_tab');
-    if (saved && ['dashboard', 'players', 'player-profile', 'payments', 'financial', 'attendance', 'activity-logs', 'settings'].includes(saved)) {
+    if (saved && ['dashboard', 'players', 'player-profile', 'payments', 'financial', 'coaches', 'attendance', 'activity-logs', 'settings'].includes(saved)) {
       return saved as NavTab;
     }
     return 'dashboard';
@@ -123,6 +124,10 @@ const MainApp: React.FC = () => {
 
         {currentTab === 'financial' && (
           <FinancialReportsView />
+        )}
+
+        {currentTab === 'coaches' && (
+          <CoachesView onNavigateToFinancial={() => setCurrentTab('financial')} />
         )}
 
         {currentTab === 'attendance' && (

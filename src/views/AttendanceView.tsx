@@ -33,11 +33,13 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ onSelectPlayer }
   const [attendanceDate, setAttendanceDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [groupPlayers, setGroupPlayers] = useState<Player[]>([]);
   const [attendanceMap, setAttendanceMap] = useState<Record<string, { status: AttendanceStatus; notes: string }>>({});
+  const [recordSearchQuery, setRecordSearchQuery] = useState('');
   const [isLoadingGroup, setIsLoadingGroup] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   // History state
   const [historyRecords, setHistoryRecords] = useState<AttendanceRecord[]>([]);
+  const [historySearchQuery, setHistorySearchQuery] = useState('');
   const [historyGroupFilter, setHistoryGroupFilter] = useState<string>('All');
   const [historyStatusFilter, setHistoryStatusFilter] = useState<string>('All');
   const [historyDateFilter, setHistoryDateFilter] = useState<string>('');
@@ -85,7 +87,8 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ onSelectPlayer }
       const records = await api.getAttendance({
         group: historyGroupFilter,
         status: historyStatusFilter,
-        date: historyDateFilter || undefined
+        date: historyDateFilter || undefined,
+        query: historySearchQuery
       });
       setHistoryRecords(records);
     } catch (err: any) {
@@ -100,6 +103,16 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ onSelectPlayer }
       loadHistory();
     }
   }, [historyGroupFilter, historyStatusFilter, historyDateFilter]);
+
+  // Debounced history search
+  useEffect(() => {
+    if (activeTab === 'history') {
+      const timer = setTimeout(() => {
+        loadHistory();
+      }, 250);
+      return () => clearTimeout(timer);
+    }
+  }, [historySearchQuery]);
 
   const handleToggleStatus = (playerId: string, status: AttendanceStatus) => {
     setAttendanceMap(prev => ({
@@ -166,15 +179,26 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ onSelectPlayer }
     success('جاري تصدير سجل الحضور كملف إكسيل...');
   };
 
+  // Filtered players for Tab 1
+  const displayedGroupPlayers = groupPlayers.filter(p => {
+    if (!recordSearchQuery.trim()) return true;
+    const q = recordSearchQuery.trim().toLowerCase();
+    return (
+      p.fullName.toLowerCase().includes(q) ||
+      p.membershipCode.toLowerCase().includes(q) ||
+      p.phone.includes(q)
+    );
+  });
+
   return (
     <div className="space-y-6 pb-16">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#1f1f23] pb-6">
         <div>
           <div className="flex items-center gap-2 text-yellow-400 text-xs font-bold uppercase tracking-wider mb-1">
-            <span>IFC ACADEMY</span>
+            <span>IFC ACADEMY • الحضور والغياب</span>
           </div>
-          <h1 className="text-2xl sm:text-3xl font-black text-white">حضور المجموعات</h1>
+          <h1 className="text-2xl sm:text-3xl font-black text-white">إدارة كشوفات الحضور</h1>
         </div>
 
         {/* Header Actions */}
@@ -282,6 +306,20 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ onSelectPlayer }
                 </div>
               </div>
             </div>
+
+            {/* In-Group Search Bar */}
+            <div className="relative pt-2 border-t border-[#1f1f23]/60">
+              <div className="absolute inset-y-0 right-0 pr-3.5 flex items-center pointer-events-none text-zinc-400">
+                <Search className="w-4 h-4 text-yellow-400/80" />
+              </div>
+              <input
+                type="text"
+                value={recordSearchQuery}
+                onChange={e => setRecordSearchQuery(e.target.value)}
+                placeholder="البحث بالاسم أو كود العضوية داخل مجموعة..."
+                className="w-full pr-10 pl-4 py-2 bg-[#050505] border border-[#1f1f23] rounded-xl text-white text-xs placeholder-zinc-500 focus:outline-none focus:border-yellow-400 text-right"
+              />
+            </div>
           </div>
 
           {/* Players Attendance List */}
@@ -290,7 +328,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ onSelectPlayer }
               <div className="flex items-center gap-2">
                 <Users className="w-4 h-4 text-yellow-400" />
                 <span className="text-sm font-bold text-white">
-                  قائمة لاعبي مجموعة <strong className="text-yellow-400 font-extrabold">{selectedGroup}</strong> ({groupPlayers.length} لاعب)
+                  قائمة لاعبي مجموعة <strong className="text-yellow-400 font-extrabold">{selectedGroup}</strong> ({displayedGroupPlayers.length} / {groupPlayers.length} لاعب)
                 </span>
               </div>
               <span className="text-xs text-zinc-400 font-mono">{attendanceDate}</span>
@@ -301,13 +339,13 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ onSelectPlayer }
                 <div className="w-10 h-10 border-3 border-yellow-400 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
                 <p className="text-xs text-zinc-400">جاري تحميل لاعبي المجموعة...</p>
               </div>
-            ) : groupPlayers.length === 0 ? (
+            ) : displayedGroupPlayers.length === 0 ? (
               <div className="py-16 text-center text-zinc-400 text-xs">
-                لا يوجد لاعبين مسجلين في مجموعة "{selectedGroup}".
+                {recordSearchQuery ? 'لا يوجد لاعبين مطابقين للبحث داخل هذه المجموعة.' : `لا يوجد لاعبين مسجلين في مجموعة "${selectedGroup}".`}
               </div>
             ) : (
               <div className="divide-y divide-[#1f1f23]/60">
-                {groupPlayers.map(player => {
+                {displayedGroupPlayers.map(player => {
                   const state = attendanceMap[player.id] || { status: 'Present', notes: '' };
                   const isPresent = state.status === 'Present';
 
@@ -413,12 +451,25 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ onSelectPlayer }
       ) : (
         /* TAB 2: HISTORICAL ATTENDANCE LOG */
         <div className="space-y-6">
-          {/* History Filters */}
+          {/* History Filters & Search */}
           <div className="bg-[#0a0a0a] border border-[#1f1f23] rounded-2xl p-4 sm:p-5 shadow-xl space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 sm:gap-4">
+              {/* Search input */}
+              <div className="sm:col-span-6 relative">
+                <div className="absolute inset-y-0 right-0 pr-3.5 flex items-center pointer-events-none text-zinc-400">
+                  <Search className="w-4 h-4 text-yellow-400/80" />
+                </div>
+                <input
+                  type="text"
+                  value={historySearchQuery}
+                  onChange={e => setHistorySearchQuery(e.target.value)}
+                  placeholder="البحث باسم اللاعب، كود العضوية، أو الملاحظات..."
+                  className="w-full pr-10 pl-4 py-2.5 bg-[#050505] border border-[#1f1f23] rounded-xl text-white text-sm placeholder-zinc-500 focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all text-right"
+                />
+              </div>
+
               {/* Group */}
-              <div>
-                <label className="block text-xs font-semibold text-zinc-400 mb-1.5">تصفية بالمجموعة</label>
+              <div className="sm:col-span-2">
                 <select
                   value={historyGroupFilter}
                   onChange={e => setHistoryGroupFilter(e.target.value)}
@@ -432,8 +483,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ onSelectPlayer }
               </div>
 
               {/* Status */}
-              <div>
-                <label className="block text-xs font-semibold text-zinc-400 mb-1.5">تصفية بالحالة</label>
+              <div className="sm:col-span-2">
                 <select
                   value={historyStatusFilter}
                   onChange={e => setHistoryStatusFilter(e.target.value)}
@@ -446,8 +496,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ onSelectPlayer }
               </div>
 
               {/* Date */}
-              <div>
-                <label className="block text-xs font-semibold text-zinc-400 mb-1.5">تصفية بالتاريخ</label>
+              <div className="sm:col-span-2">
                 <input
                   type="date"
                   value={historyDateFilter}
@@ -468,8 +517,8 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({ onSelectPlayer }
             ) : historyRecords.length === 0 ? (
               <div className="py-16 text-center space-y-2">
                 <CalendarCheck className="w-10 h-10 text-zinc-600 mx-auto" />
-                <h3 className="text-sm font-bold text-white">لا توجد سجلات حضور حتى الآن.</h3>
-                <p className="text-xs text-zinc-400">قم بتسجيل حضور اليوم من التبويب السابق.</p>
+                <h3 className="text-sm font-bold text-white">لا توجد سجلات حضور مطابقة للبحث.</h3>
+                <p className="text-xs text-zinc-400">قم بتسجيل حضور اليوم من التبويب السابق أو تعديل خيارات الفلترة.</p>
               </div>
             ) : (
               <div className="overflow-x-auto">

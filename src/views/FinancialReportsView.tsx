@@ -19,7 +19,9 @@ import {
   ArrowUpRight,
   ArrowDownLeft,
   Building2,
-  FileText
+  FileText,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { FinancialTransaction, Invoice, FinancialOverviewStats } from '../types';
 import { api } from '../services/api';
@@ -29,6 +31,8 @@ export const FinancialReportsView: React.FC = () => {
   const { success, error } = useToast();
 
   const [activeSubTab, setActiveSubTab] = useState<'overview' | 'transactions' | 'invoices'>('overview');
+  const [showRevenue, setShowRevenue] = useState<boolean>(true);
+  const [showBalance, setShowBalance] = useState<boolean>(true);
   const [stats, setStats] = useState<FinancialOverviewStats>({
     totalRevenue: 0,
     totalExpenses: 0,
@@ -185,14 +189,25 @@ export const FinancialReportsView: React.FC = () => {
         {/* Total Revenue */}
         <div className="bg-[#0a0a0a] border border-[#1f1f23] rounded-2xl p-5 relative overflow-hidden">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-zinc-400">إجمالي الإيرادات</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-zinc-400">إجمالي الإيرادات</span>
+              <button
+                type="button"
+                onClick={() => setShowRevenue(!showRevenue)}
+                className="text-zinc-400 hover:text-yellow-400 transition-colors p-1 rounded-md hover:bg-zinc-800/50 cursor-pointer"
+                title={showRevenue ? "إخفاء الإيرادات" : "إظهار الإيرادات"}
+              >
+                {showRevenue ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+              </button>
+            </div>
             <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
               <TrendingUp className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-4">
             <span className="text-2xl font-black text-emerald-400">
-              {stats.totalRevenue.toLocaleString()} <span className="text-xs font-bold text-zinc-400">EGP</span>
+              {showRevenue ? `${stats.totalRevenue.toLocaleString()} ` : '•••••• '}
+              <span className="text-xs font-bold text-zinc-400">EGP</span>
             </span>
           </div>
           <p className="text-[11px] text-zinc-500 mt-1">الاشتراكات والتحصيلات المسددة</p>
@@ -233,14 +248,25 @@ export const FinancialReportsView: React.FC = () => {
         {/* Net Cash Balance */}
         <div className="bg-[#0a0a0a] border border-[#1f1f23] rounded-2xl p-5 relative overflow-hidden">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-zinc-400">صافي الخزينة (الرصيد)</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-zinc-400">صافي الخزينة (الرصيد)</span>
+              <button
+                type="button"
+                onClick={() => setShowBalance(!showBalance)}
+                className="text-zinc-400 hover:text-yellow-400 transition-colors p-1 rounded-md hover:bg-zinc-800/50 cursor-pointer"
+                title={showBalance ? "إخفاء الرصيد" : "إظهار الرصيد"}
+              >
+                {showBalance ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+              </button>
+            </div>
             <div className="w-9 h-9 rounded-xl bg-yellow-400/10 border border-yellow-400/20 flex items-center justify-center text-yellow-400">
               <DollarSign className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-4">
             <span className={`text-2xl font-black ${stats.netBalance >= 0 ? 'text-yellow-400' : 'text-rose-500'}`}>
-              {stats.netBalance.toLocaleString()} <span className="text-xs font-bold text-zinc-400">EGP</span>
+              {showBalance ? `${stats.netBalance.toLocaleString()} ` : '•••••• '}
+              <span className="text-xs font-bold text-zinc-400">EGP</span>
             </span>
           </div>
           <p className="text-[11px] text-zinc-500 mt-1">الإيرادات - المصروفات والرواتب</p>

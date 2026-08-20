@@ -25,7 +25,11 @@ import {
   Copy,
   Check,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Key,
+  Globe,
+  X,
+  AlertCircle
 } from 'lucide-react';
 import { Logo } from '../components/Logo';
 import { useAuth } from '../context/AuthContext';
@@ -81,120 +85,160 @@ export const SettingsView: React.FC = () => {
   const [showSqlSchema, setShowSqlSchema] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
 
-  const supabaseSqlSchema = `-- 1. جدول بيانات اللاعبين (Players Table)
-CREATE TABLE IF NOT EXISTS players (
-  id TEXT PRIMARY KEY,
-  "membershipCode" TEXT UNIQUE,
-  "nationalId" TEXT,
+  // Supabase Credentials Modal State
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+  const [inputSupabaseUrl, setInputSupabaseUrl] = useState('');
+  const [inputSupabaseKey, setInputSupabaseKey] = useState('');
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [testFeedback, setTestFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const handleTestConnection = async () => {
+    if (!inputSupabaseUrl.trim() || !inputSupabaseKey.trim()) {
+      setTestFeedback({
+        type: 'error',
+        message: 'يرجى إدخال عنوان المشروع (Project URL) ومفتاح الوصول (API Key) أولاً'
+      });
+      return;
+    }
+    setIsTestingConnection(true);
+    setTestFeedback(null);
+    try {
+      const res = await api.testSupabaseConnection(inputSupabaseUrl, inputSupabaseKey);
+      if (res.success) {
+        setTestFeedback({
+          type: 'success',
+          message: res.message || 'تم الاتصال بقاعدة بيانات Supabase بنجاح! الاستجابة ممتازة.'
+        });
+      } else {
+        setTestFeedback({
+          type: 'error',
+          message: res.message || res.error || 'تعذر الاتصال بـ Supabase، يرجى التحقق من الرابط والمفتاح.'
+        });
+      }
+    } catch (err: any) {
+      setTestFeedback({
+        type: 'error',
+        message: err.message || 'حدث خطأ في الشبكة أثناء اختبار الاتصال'
+      });
+    } finally {
+      setIsTestingConnection(false);
+    }
+  };
+
+  const supabaseSqlSchema = `-- ==============================================================================
+-- IFC ACADEMY - SUPABASE POSTGRESQL PRODUCTION SCHEMA (UUID PRIMARY & FOREIGN KEYS)
+-- ==============================================================================
+
+-- Enable UUID extension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- 1. جدول بيانات اللاعبين (Players Table - UUID)
+CREATE TABLE IF NOT EXISTS public.players (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   "fullName" TEXT NOT NULL,
-  phone TEXT,
-  "birthDate" TEXT,
-  age INTEGER,
-  "group" TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'Active',
+  "membershipCode" TEXT NOT NULL UNIQUE,
+  phone TEXT NOT NULL,
+  "birthDate" DATE NOT NULL,
+  age INTEGER NOT NULL,
+  "group" TEXT NOT NULL CHECK ("group" IN ('براعم', 'ناشئين', 'شباب')),
+  status TEXT NOT NULL DEFAULT 'Active' CHECK (status IN ('Active', 'Inactive')),
+  "nationalId" TEXT,
   notes TEXT,
-  parent JSONB,
-  "activeSubscription" JSONB,
-  "createdAt" TIMESTAMPTZ DEFAULT NOW()
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 2. جدول الاشتراكات (Subscriptions Table)
-CREATE TABLE IF NOT EXISTS subscriptions (
-  id TEXT PRIMARY KEY,
-  "playerId" TEXT REFERENCES players(id) ON DELETE CASCADE,
-  "playerName" TEXT,
-  "membershipCode" TEXT,
-  "group" TEXT,
-  "planName" TEXT,
-  value NUMERIC,
-  "startDate" TEXT,
-  "endDate" TEXT,
-  status TEXT DEFAULT 'Unpaid',
-  "daysRemaining" INTEGER,
-  "lastPaymentDate" TEXT,
-  "lastPaidBy" TEXT,
-  "createdAt" TIMESTAMPTZ DEFAULT NOW()
+-- 2. جدول أولياء الأمور (Parents Table - UUID FK)
+CREATE TABLE IF NOT EXISTS public.parents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "playerId" UUID NOT NULL REFERENCES public.players(id) ON DELETE CASCADE,
+  "parentName" TEXT NOT NULL,
+  "parentPhone" TEXT NOT NULL,
+  relationship TEXT NOT NULL,
+  "emergencyPhone" TEXT
 );
 
--- 3. جدول سجلات المدفوعات والتحصيل (Payments Table)
-CREATE TABLE IF NOT EXISTS payments (
-  id TEXT PRIMARY KEY,
-  "playerId" TEXT REFERENCES players(id) ON DELETE CASCADE,
-  "playerName" TEXT,
-  "membershipCode" TEXT,
-  "subscriptionId" TEXT,
+-- 3. جدول الاشتراكات (Subscriptions Table - UUID FK)
+CREATE TABLE IF NOT EXISTS public.subscriptions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "playerId" UUID NOT NULL REFERENCES public.players(id) ON DELETE CASCADE,
+  "planName" TEXT NOT NULL DEFAULT 'اشتراك شهري',
+  value NUMERIC NOT NULL DEFAULT 500,
+  "startDate" DATE NOT NULL,
+  "endDate" DATE NOT NULL,
+  status TEXT NOT NULL DEFAULT 'Unpaid' CHECK (status IN ('Paid', 'Unpaid', 'ExpiringSoon', 'Expired')),
+  "lastPaymentDate" DATE,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 4. جدول سجلات المدفوعات والتحصيل (Payments Table - UUID FK)
+CREATE TABLE IF NOT EXISTS public.payments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "playerId" UUID NOT NULL REFERENCES public.players(id) ON DELETE CASCADE,
+  "subscriptionId" UUID REFERENCES public.subscriptions(id) ON DELETE SET NULL,
   amount NUMERIC NOT NULL,
-  "paymentMethod" TEXT DEFAULT 'Cash',
-  "paidBy" TEXT,
-  "paymentDate" TEXT NOT NULL,
-  status TEXT DEFAULT 'Paid',
+  "paymentMethod" TEXT NOT NULL CHECK ("paymentMethod" IN ('Cash', 'Wallet', 'InstaPay')),
+  "paidBy" TEXT NOT NULL DEFAULT 'ولي الأمر',
+  "paymentDate" DATE NOT NULL DEFAULT CURRENT_DATE,
+  status TEXT NOT NULL DEFAULT 'Paid',
+  "receiptNumber" TEXT NOT NULL,
   notes TEXT,
-  "receiptNumber" TEXT UNIQUE,
-  "createdAt" TIMESTAMPTZ DEFAULT NOW()
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 4. جدول الحضور والغياب (Attendance Table)
-CREATE TABLE IF NOT EXISTS attendance (
-  id TEXT PRIMARY KEY,
-  "playerId" TEXT REFERENCES players(id) ON DELETE CASCADE,
-  "playerName" TEXT,
-  "membershipCode" TEXT,
-  "group" TEXT NOT NULL,
-  date TEXT NOT NULL,
-  status TEXT NOT NULL,
+-- 5. جدول الحضور والغياب (Attendance Table - UUID FK)
+CREATE TABLE IF NOT EXISTS public.attendance (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "playerId" UUID NOT NULL REFERENCES public.players(id) ON DELETE CASCADE,
+  "group" TEXT NOT NULL CHECK ("group" IN ('براعم', 'ناشئين', 'شباب')),
+  date DATE NOT NULL DEFAULT CURRENT_DATE,
+  status TEXT NOT NULL CHECK (status IN ('Present', 'Absent')),
   notes TEXT,
-  "markedAt" TIMESTAMPTZ DEFAULT NOW()
+  "markedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE ("playerId", date)
 );
 
--- 5. جدول إعدادات الأكاديمية (Settings Table)
-CREATE TABLE IF NOT EXISTS settings (
+-- 6. جدول إعدادات الأكاديمية (Settings Table)
+CREATE TABLE IF NOT EXISTS public.settings (
   id TEXT PRIMARY KEY DEFAULT 'academy_settings',
-  "academyName" TEXT,
+  "academyName" TEXT NOT NULL DEFAULT 'IFC ACADEMY',
   phone TEXT,
   address TEXT,
-  currency TEXT DEFAULT 'EGP',
-  "defaultMonthlyFee" NUMERIC DEFAULT 500,
-  "adminNotifications" BOOLEAN DEFAULT true
+  currency TEXT NOT NULL DEFAULT 'EGP',
+  "defaultMonthlyFee" NUMERIC NOT NULL DEFAULT 500,
+  "adminNotifications" BOOLEAN NOT NULL DEFAULT true,
+  "googleDriveFolderId" TEXT,
+  "googleSpreadsheetId" TEXT,
+  "lastBackupAt" TIMESTAMPTZ
 );
 
--- 6. جدول المعاملات المالية والمصروفات والرواتب (Financial Transactions)
-CREATE TABLE IF NOT EXISTS financial_transactions (
-  id TEXT PRIMARY KEY,
+-- 7. جدول المعاملات المالية والمصروفات والرواتب (Financial Transactions - UUID FK)
+CREATE TABLE IF NOT EXISTS public.financial_transactions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   type TEXT NOT NULL CHECK (type IN ('income', 'expense', 'salary', 'withdrawal')),
   amount NUMERIC NOT NULL,
-  date TEXT NOT NULL,
+  date DATE NOT NULL DEFAULT CURRENT_DATE,
   description TEXT NOT NULL,
   category TEXT,
   "coachName" TEXT,
   notes TEXT,
-  "paymentId" TEXT REFERENCES payments(id) ON DELETE SET NULL,
-  "createdAt" TIMESTAMPTZ DEFAULT NOW()
+  "paymentId" UUID REFERENCES public.payments(id) ON DELETE SET NULL,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 7. جدول سجل النشاطات والأمان (Activity & Audit Logs)
-CREATE TABLE IF NOT EXISTS activity_logs (
-  id TEXT PRIMARY KEY,
+-- 8. جدول سجل النشاطات والأمان (Activity Logs)
+CREATE TABLE IF NOT EXISTS public.activity_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   "userId" TEXT NOT NULL DEFAULT 'admin-1',
   action TEXT NOT NULL,
   "entityType" TEXT NOT NULL,
   "entityId" TEXT,
   description TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'SUCCESS',
-  timestamp TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 8. جدول سجل النسخ الاحتياطي (Backups Log)
-CREATE TABLE IF NOT EXISTS backups (
-  id TEXT PRIMARY KEY,
-  type TEXT NOT NULL DEFAULT 'daily',
-  "startedAt" TIMESTAMPTZ DEFAULT NOW(),
-  "completedAt" TIMESTAMPTZ,
-  status TEXT NOT NULL DEFAULT 'SUCCESS',
-  filename TEXT NOT NULL,
-  "googleDriveFileId" TEXT,
-  "fileSize" TEXT,
-  "createdAt" TIMESTAMPTZ DEFAULT NOW()
+  timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );`;
+
 
 
   const handleCopySql = () => {
@@ -416,41 +460,29 @@ CREATE TABLE IF NOT EXISTS backups (
     }
   };
 
-  // Download Backup JSON
-  const handleExportBackupJSON = async () => {
+  const handleSaveSupabaseConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputSupabaseUrl || !inputSupabaseKey) {
+      error('يرجى ملء رابط المشروع ومفتاح API');
+      return;
+    }
+    setIsSavingConfig(true);
     try {
-      const [players, payments, attendance, settings] = await Promise.all([
-        api.getPlayers(),
-        api.getPayments(),
-        api.getAttendance(),
-        api.getSettings()
-      ]);
-
-      const backupData = {
-        exportedAt: new Date().toISOString(),
-        summary: {
-          totalPlayers: players.length,
-          activePlayers: players.filter(p => p.status === 'Active').length,
-          inactivePlayers: players.filter(p => p.status !== 'Active').length,
-          paidSubscriptions: players.filter(p => p.activeSubscription?.status === 'Paid').length,
-          totalRevenue: payments.reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
-        },
-        academy: settings,
-        players,
-        payments,
-        attendance
-      };
-
-      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `IFC_Academy_Database_${new Date().toISOString().split('T')[0]}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      success('تم تصدير النسخة الاحتياطية المتكاملة لقاعدة البيانات بنجاح');
-    } catch (err) {
-      error('حدث خطأ أثناء تصدير النسخة الاحتياطية');
+      const res = await api.configureSupabase(inputSupabaseUrl, inputSupabaseKey);
+      if (res.success) {
+        success(res.message || 'تم حفظ مفاتيح الربط بنجاح');
+        setSupabaseStatus({
+          configured: true,
+          supabaseUrl: inputSupabaseUrl.replace(/(https?:\/\/)([^.]+)(.*)/, '$1***$3')
+        });
+        setIsConfigModalOpen(false);
+      } else {
+        error(res.message || 'فشل حفظ الإعدادات');
+      }
+    } catch (err: any) {
+      error(err.message || 'فشل الاتصال بمشروع Supabase');
+    } finally {
+      setIsSavingConfig(false);
     }
   };
 
@@ -537,15 +569,6 @@ CREATE TABLE IF NOT EXISTS backups (
               >
                 <FileSpreadsheet className="w-4 h-4" />
                 <span>{isDownloadingReport ? 'جاري التصدير...' : 'تحميل جميع البيانات (Excel / CSV)'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleExportBackupJSON}
-                className="flex items-center gap-2 px-4 py-3 rounded-xl bg-[#151518] hover:bg-[#202024] text-zinc-200 hover:text-white border border-[#27272a] font-bold text-xs cursor-pointer transition-all active:scale-95"
-              >
-                <Download className="w-4 h-4 text-yellow-400" />
-                <span>نسخة احتياطية (JSON)</span>
               </button>
             </div>
           </div>
@@ -846,7 +869,16 @@ CREATE TABLE IF NOT EXISTS backups (
               </p>
             </div>
 
-            <div className="flex items-center gap-3 shrink-0">
+            <div className="flex flex-wrap items-center gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsConfigModalOpen(true)}
+                className="flex items-center gap-2 px-4 py-3 rounded-xl bg-[#151518] hover:bg-[#202024] text-zinc-200 hover:text-white border border-[#27272a] font-bold text-xs sm:text-sm cursor-pointer transition-all active:scale-95 shadow-md"
+              >
+                <Key className="w-4 h-4 text-yellow-400" />
+                <span>إدخال / تعديل بيانات ومفاتيح الربط</span>
+              </button>
+
               <button
                 type="button"
                 onClick={handleSyncWithSupabase}
@@ -858,6 +890,136 @@ CREATE TABLE IF NOT EXISTS backups (
               </button>
             </div>
           </div>
+
+          {/* Supabase Credentials Modal */}
+          {isConfigModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+              <div className="bg-[#0e0e11] border border-[#27272a] rounded-2xl w-full max-w-lg p-6 sm:p-8 shadow-2xl space-y-6 text-right relative">
+                <div className="flex items-center justify-between pb-4 border-b border-[#1f1f23]">
+                  <div className="flex items-center gap-2">
+                    <div className="w-9 h-9 rounded-xl bg-emerald-400/10 border border-emerald-400/20 flex items-center justify-center text-emerald-400">
+                      <Key className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-white">إدخال بيانات الربط مع Supabase</h3>
+                      <p className="text-xs text-zinc-400">Project URL & API Key (Anon / Service Role)</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsConfigModalOpen(false)}
+                    className="w-8 h-8 rounded-lg bg-[#18181b] hover:bg-[#27272a] text-zinc-400 hover:text-white flex items-center justify-center cursor-pointer transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <form onSubmit={handleSaveSupabaseConfig} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-zinc-300 mb-1.5 flex items-center justify-between">
+                      <span>عنوان مشروع Supabase (Project URL)</span>
+                      <span className="text-[10px] text-zinc-500 font-normal">مثال: https://xyzcompany.supabase.co</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="url"
+                        value={inputSupabaseUrl}
+                        onChange={e => setInputSupabaseUrl(e.target.value)}
+                        placeholder="https://your-project-ref.supabase.co"
+                        className="w-full pl-4 pr-10 py-2.5 bg-[#050505] border border-[#27272a] rounded-xl text-emerald-400 font-mono text-xs sm:text-sm focus:border-emerald-400 focus:outline-none text-left dir-ltr"
+                        required
+                      />
+                      <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-zinc-500">
+                        <Globe className="w-4 h-4" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-zinc-300 mb-1.5 flex items-center justify-between">
+                      <span>مفتاح الوصول API Key (Anon Key أو Service Role)</span>
+                      <span className="text-[10px] text-zinc-500 font-normal">من إعدادات Project Settings - API</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="password"
+                        value={inputSupabaseKey}
+                        onChange={e => setInputSupabaseKey(e.target.value)}
+                        placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                        className="w-full pl-4 pr-10 py-2.5 bg-[#050505] border border-[#27272a] rounded-xl text-emerald-400 font-mono text-xs sm:text-sm focus:border-emerald-400 focus:outline-none text-left dir-ltr"
+                        required
+                      />
+                      <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-zinc-500">
+                        <Key className="w-4 h-4" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {testFeedback && (
+                    <div className={`p-3.5 rounded-xl text-xs font-medium border flex items-start gap-2.5 ${
+                      testFeedback.type === 'success'
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                        : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                    }`}>
+                      <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${
+                        testFeedback.type === 'success' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
+                      }`}>
+                        {testFeedback.type === 'success' ? <Check className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+                      </div>
+                      <div className="flex-1 leading-relaxed">
+                        <p className="font-bold">{testFeedback.type === 'success' ? 'نجح الاتصال:' : 'تنبيه الاتصال:'}</p>
+                        <p className="text-[11px] opacity-90 mt-0.5">{testFeedback.message}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="p-3.5 bg-[#050505] border border-[#1f1f23] rounded-xl text-xs text-zinc-400 space-y-1.5">
+                    <p className="font-bold text-zinc-300">أين أجد هذه البيانات في Supabase؟</p>
+                    <p className="text-[11px] leading-relaxed">
+                      1. افتح مشروعك في لوحة تحكم Supabase Dashboard.
+                      <br />
+                      2. ادخل إلى <span className="text-emerald-400 font-mono">Project Settings &gt; API</span>.
+                      <br />
+                      3. انسخ <span className="text-emerald-400 font-mono">Project URL</span> و <span className="text-emerald-400 font-mono">anon public key</span> أو <span className="text-emerald-400 font-mono">service_role</span>.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={handleTestConnection}
+                      disabled={isTestingConnection || isSavingConfig}
+                      className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#18181b] hover:bg-[#27272a] text-zinc-200 border border-[#27272a] text-xs font-bold cursor-pointer transition-colors active:scale-95 disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 text-yellow-400 ${isTestingConnection ? 'animate-spin' : ''}`} />
+                      <span>{isTestingConnection ? 'جاري فحص الاتصال...' : 'اختبار الاتصال (Test Connection)'}</span>
+                    </button>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsConfigModalOpen(false);
+                          setTestFeedback(null);
+                        }}
+                        className="px-4 py-2.5 rounded-xl bg-[#18181b] hover:bg-[#27272a] text-zinc-300 text-xs font-bold cursor-pointer transition-colors"
+                      >
+                        إلغاء
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isSavingConfig || isTestingConnection}
+                        className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs sm:text-sm cursor-pointer shadow-lg shadow-emerald-500/20 transition-all active:scale-95 disabled:opacity-50"
+                      >
+                        <Save className="w-4 h-4" />
+                        <span>{isSavingConfig ? 'جاري الحفظ...' : 'حفظ وتفعيل الاتصال'}</span>
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
 
           {/* SQL Tables Schema Viewer & Quick Copy */}
           <div className="mt-6 pt-6 border-t border-[#1f1f23]">

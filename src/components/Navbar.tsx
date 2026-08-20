@@ -13,14 +13,15 @@ import {
   AlertCircle,
   Clock,
   DollarSign,
-  History
+  History,
+  UserCheck
 } from 'lucide-react';
 import { Logo } from './Logo';
 import { useAuth } from '../context/AuthContext';
 import { AppNotification } from '../types';
 import { api } from '../services/api';
 
-export type NavTab = 'dashboard' | 'players' | 'payments' | 'financial' | 'attendance' | 'activity-logs' | 'settings' | 'player-profile';
+export type NavTab = 'dashboard' | 'players' | 'payments' | 'financial' | 'coaches' | 'attendance' | 'activity-logs' | 'settings' | 'player-profile';
 
 interface NavbarProps {
   currentTab: NavTab;
@@ -72,6 +73,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onSelectTab, onSelec
     { id: 'players' as NavTab, label: 'اللاعبين', shortLabel: 'اللاعبين', icon: Users },
     { id: 'payments' as NavTab, label: 'المدفوعات والاشتراكات', shortLabel: 'المدفوعات', icon: CreditCard },
     { id: 'financial' as NavTab, label: 'المالية والتقارير', shortLabel: 'المالية', icon: DollarSign },
+    { id: 'coaches' as NavTab, label: 'الجهاز الفني والمدربين', shortLabel: 'المدربين', icon: UserCheck },
     { id: 'attendance' as NavTab, label: 'الحضور والغياب', shortLabel: 'الحضور', icon: CalendarCheck },
     { id: 'activity-logs' as NavTab, label: 'سجل النشاطات والنسخ', shortLabel: 'النشاطات', icon: History },
     { id: 'settings' as NavTab, label: 'الإعدادات', shortLabel: 'الإعدادات', icon: Settings }
@@ -152,7 +154,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onSelectTab, onSelec
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 10, scale: 0.95 }}
                     transition={{ duration: 0.15 }}
-                    className="absolute left-0 sm:left-auto right-0 sm:right-0 mt-3 w-80 sm:w-96 bg-[#0a0a0a] border border-[#1f1f23] rounded-2xl shadow-2xl overflow-hidden z-50 p-2"
+                    className="absolute left-0 sm:left-0 sm:right-auto mt-3 w-80 sm:w-96 max-w-[90vw] bg-[#0a0a0a] border border-[#1f1f23] rounded-2xl shadow-2xl overflow-hidden z-50 p-2"
                   >
                     <div className="p-3 border-b border-[#1f1f23] flex items-center justify-between">
                       <div className="flex items-center gap-2">

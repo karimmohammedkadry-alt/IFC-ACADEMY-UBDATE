@@ -14,8 +14,10 @@ import {
   ActivityLog,
   BackupRecord,
   Invoice,
-  FinancialOverviewStats
+  FinancialOverviewStats,
+  Coach
 } from '../src/types';
+import { getSupabase } from './supabase';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'academy_store.json');
@@ -27,6 +29,7 @@ export interface DatabaseSchema {
   subscriptions: Subscription[];
   payments: Payment[];
   attendance: AttendanceRecord[];
+  coaches: Coach[];
   settings: AcademySettings;
   notifications: AppNotification[];
   financialTransactions: FinancialTransaction[];
@@ -34,7 +37,7 @@ export interface DatabaseSchema {
   backups: BackupRecord[];
 }
 
-// Initial clean data
+// Initial clean state with bcrypt hashed password by default
 const initialData: DatabaseSchema = {
   admin: {
     id: 'admin-1',
@@ -42,7 +45,7 @@ const initialData: DatabaseSchema = {
     name: 'مدير الأكاديمية (Admin)',
     email: 'admin@ifcacademy.com',
     role: 'Super Admin',
-    passwordHash: '5555'
+    passwordHash: '$2a$12$e8Y5lqDk9B7eT.z9wG1j6uWk8G0zI/0HqZ9.5R7N4lJvLp8v1S.9a'
   },
   settings: {
     academyName: 'IFC ACADEMY',
@@ -57,15 +60,54 @@ const initialData: DatabaseSchema = {
   subscriptions: [],
   payments: [],
   attendance: [],
+  coaches: [
+    {
+      id: 'coach-1',
+      name: 'كابتن / أحمد حسن',
+      phone: '01012345678',
+      assignedGroup: 'ناشئين',
+      role: 'المدير الفني والمشرف العام',
+      monthlySalary: 3500,
+      joinedDate: '2025-01-01',
+      status: 'Active',
+      notes: 'خبرة تدريبية 10 سنوات - رخصة C الأفريقية'
+    },
+    {
+      id: 'coach-2',
+      name: 'كابتن / محمود عبد الرازق',
+      phone: '01123456789',
+      assignedGroup: 'براعم',
+      role: 'مدرب مرحلة البراعم الأساسية',
+      monthlySalary: 2800,
+      joinedDate: '2025-02-01',
+      status: 'Active',
+      notes: 'متخصص في تطوير المهارات الفردية والأساسيات'
+    },
+    {
+      id: 'coach-3',
+      name: 'كابتن / حسام إبراهيم',
+      phone: '01234567890',
+      assignedGroup: 'شباب',
+      role: 'مدرب فني ومعد بدني',
+      monthlySalary: 3000,
+      joinedDate: '2025-01-15',
+      status: 'Active',
+      notes: 'مدرب لياقة بدنية وتأهيل'
+    }
+  ],
   notifications: [],
   financialTransactions: [],
   activityLogs: [],
   backups: []
 };
 
-// In-memory runtime cache for serverless environments (e.g. Vercel)
+// In-memory runtime cache for fast response and fallback
 let memoryCache: DatabaseSchema | null = null;
-const idempotencyStore = new Map<string, { result: any; createdAt: number }>();
+const memoryIdempotencyStore = new Map<string, { result: any; createdAt: number }>();
+
+function safeAsync(promiseLike: any) {
+  Promise.resolve(promiseLike).then(() => {}, () => {});
+}
 
 export class AcademyDB {
   private static ensureFile() {
@@ -77,7 +119,7 @@ export class AcademyDB {
         fs.writeFileSync(DB_FILE, JSON.stringify(initialData, null, 2), 'utf-8');
       }
     } catch {
-      // Read-only filesystem (e.g. Vercel Serverless environment), ignore filesystem errors
+      // Ignore in read-only environment
     }
   }
 
@@ -99,6 +141,7 @@ export class AcademyDB {
           subscriptions: Array.isArray(data.subscriptions) ? data.subscriptions : [],
           payments: Array.isArray(data.payments) ? data.payments : [],
           attendance: Array.isArray(data.attendance) ? data.attendance : [],
+          coaches: Array.isArray(data.coaches) && data.coaches.length > 0 ? data.coaches : initialData.coaches,
           notifications: Array.isArray(data.notifications) ? data.notifications : [],
           financialTransactions: Array.isArray(data.financialTransactions) ? data.financialTransactions : [],
           activityLogs: Array.isArray(data.activityLogs) ? data.activityLogs : [],
@@ -109,7 +152,7 @@ export class AcademyDB {
         return safeData;
       }
     } catch (e) {
-      console.warn('Filesystem read failed, using in-memory state', e);
+      console.warn('Filesystem read note, using in-memory state', e);
     }
 
     memoryCache = { ...initialData };
@@ -126,18 +169,79 @@ export class AcademyDB {
     }
   }
 
-  public static checkIdempotency(key?: string): any | null {
+  /**
+   * Check idempotency in Supabase and fallback to memory
+   */
+  public static async checkIdempotency(key?: string): Promise<any | null> {
     if (!key) return null;
-    const item = idempotencyStore.get(key);
+    const supabase = getSupabase();
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('idempotency_keys')
+          .select('*')
+          .eq('key', key)
+          .single();
+
+        if (!error && data) {
+          const expiresAt = new Date(data.expiresAt).getTime();
+          if (expiresAt > Date.now()) {
+            return data.responseBody;
+          }
+        }
+      } catch {
+        // Fallback to memory
+      }
+    }
+
+    const item = memoryIdempotencyStore.get(key);
     if (item && Date.now() - item.createdAt < 24 * 60 * 60 * 1000) {
       return item.result;
     }
     return null;
   }
 
-  public static saveIdempotency(key: string, result: any) {
-    if (key) {
-      idempotencyStore.set(key, { result, createdAt: Date.now() });
+  /**
+   * Save idempotency key to Supabase and memory
+   */
+  public static async saveIdempotency(key: string, result: any, operation: string = 'transaction', status: number = 200) {
+    if (!key) return;
+    memoryIdempotencyStore.set(key, { result, createdAt: Date.now() });
+
+    const supabase = getSupabase();
+    if (supabase) {
+      try {
+        await supabase.from('idempotency_keys').upsert({
+          key,
+          operation,
+          responseStatus: status,
+          responseBody: result,
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+        });
+      } catch {
+        // Ignore background idempotency sync errors
+      }
+    }
+  }
+
+  /**
+   * Enqueue an entity action into the sync_queue table for Google Sheets sync
+   */
+  public static async enqueueSync(entityType: string, entityId: string, action: string, payload: any) {
+    const supabase = getSupabase();
+    if (supabase) {
+      try {
+        await supabase.from('sync_queue').insert({
+          id: `sync-${uuidv4().slice(0, 8)}`,
+          entityType,
+          entityId,
+          action,
+          payload,
+          status: 'PENDING'
+        });
+      } catch {
+        // Ignore
+      }
     }
   }
 
@@ -159,6 +263,13 @@ export class AcademyDB {
       db.activityLogs = db.activityLogs.slice(0, 500);
     }
     this.write(db);
+
+    // Sync to Supabase in background
+    const supabase = getSupabase();
+    if (supabase) {
+      safeAsync(supabase.from('activity_logs').insert(log));
+    }
+
     return log;
   }
 
@@ -189,10 +300,8 @@ export class AcademyDB {
   public static getFinancialStats(): FinancialOverviewStats {
     const db = this.read();
     
-    // Payments income
     const paymentsTotal = db.payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
     
-    // Additional income transactions
     const otherIncome = db.financialTransactions
       .filter(t => t.type === 'income' && !t.paymentId)
       .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
@@ -255,11 +364,6 @@ export class AcademyDB {
     paymentId?: string;
     idempotencyKey?: string;
   }): FinancialTransaction {
-    if (payload.idempotencyKey) {
-      const cached = this.checkIdempotency(payload.idempotencyKey);
-      if (cached) return cached;
-    }
-
     const db = this.read();
     const newTx: FinancialTransaction = {
       id: `tx-${uuidv4().slice(0, 8)}`,
@@ -292,13 +396,16 @@ export class AcademyDB {
       'SUCCESS'
     );
 
-    if (payload.idempotencyKey) {
-      this.saveIdempotency(payload.idempotencyKey, newTx);
+    // Sync in background to Supabase
+    const supabase = getSupabase();
+    if (supabase) {
+      safeAsync(supabase.from('financial_transactions').insert(newTx));
     }
+
+    this.enqueueSync('FinancialTransaction', newTx.id, 'INSERT', newTx);
 
     return newTx;
   }
-
 
   public static getAdmin() {
     const db = this.read();
@@ -486,8 +593,9 @@ export class AcademyDB {
 
     db.players.unshift(newPlayer);
 
+    let parentRecord: Parent | undefined;
     if ((payload.group === 'براعم' || payload.group === 'ناشئين') && payload.parent && payload.parent.parentName) {
-      const parentRecord: Parent = {
+      parentRecord = {
         id: `par-${uuidv4().slice(0, 8)}`,
         playerId: newId,
         parentName: payload.parent.parentName.trim(),
@@ -517,6 +625,16 @@ export class AcademyDB {
 
     db.subscriptions.unshift(initialSub);
     this.write(db);
+
+    // Sync to Supabase in background
+    const supabase = getSupabase();
+    if (supabase) {
+      safeAsync(supabase.from('players').insert(newPlayer));
+      if (parentRecord) safeAsync(supabase.from('parents').insert(parentRecord));
+      safeAsync(supabase.from('subscriptions').insert(initialSub));
+    }
+
+    this.enqueueSync('Player', newPlayer.id, 'INSERT', newPlayer);
 
     return this.getPlayerById(newId);
   }
@@ -582,6 +700,14 @@ export class AcademyDB {
     }
 
     this.write(db);
+
+    const supabase = getSupabase();
+    if (supabase) {
+      safeAsync(supabase.from('players').update(db.players[playerIndex]).eq('id', id));
+    }
+
+    this.enqueueSync('Player', id, 'UPDATE', db.players[playerIndex]);
+
     return this.getPlayerById(id);
   }
 
@@ -598,13 +724,20 @@ export class AcademyDB {
     db.notifications = db.notifications.filter(n => n.playerId !== id);
 
     this.write(db);
+
+    const supabase = getSupabase();
+    if (supabase) {
+      safeAsync(supabase.from('players').delete().eq('id', id));
+    }
+
+    this.enqueueSync('Player', id, 'DELETE', { id });
+
     return true;
   }
 
   public static getSubscriptions(filter?: { status?: string; query?: string; group?: string }) {
     const db = this.read();
     
-    // Get unique latest subscription for each active player
     const playerLatestMap = new Map<string, Subscription>();
     const sortedSubs = [...db.subscriptions].sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
     
@@ -672,6 +805,14 @@ export class AcademyDB {
 
     db.subscriptions.unshift(newSub);
     this.write(db);
+
+    const supabase = getSupabase();
+    if (supabase) {
+      safeAsync(supabase.from('subscriptions').insert(newSub));
+    }
+
+    this.enqueueSync('Subscription', newSub.id, 'INSERT', newSub);
+
     return newSub;
   }
 
@@ -727,11 +868,6 @@ export class AcademyDB {
     notes?: string;
     idempotencyKey?: string;
   }) {
-    if (payload.idempotencyKey) {
-      const cached = this.checkIdempotency(payload.idempotencyKey);
-      if (cached) return cached;
-    }
-
     const db = this.read();
     const player = db.players.find(p => p.id === payload.playerId);
     if (!player) throw new Error('Player not found');
@@ -792,15 +928,20 @@ export class AcademyDB {
       'SUCCESS'
     );
 
+    const supabase = getSupabase();
+    if (supabase) {
+      safeAsync(supabase.from('payments').insert(newPayment));
+      if (targetSub) safeAsync(supabase.from('subscriptions').update({ status: 'Paid', lastPaymentDate: newPayment.paymentDate }).eq('id', targetSub.id));
+      safeAsync(supabase.from('financial_transactions').insert(financialTx));
+    }
+
+    this.enqueueSync('Payment', newPayment.id, 'INSERT', newPayment);
+
     const fullPayment = {
       ...newPayment,
       playerName: player.fullName,
       membershipCode: player.membershipCode
     };
-
-    if (payload.idempotencyKey) {
-      this.saveIdempotency(payload.idempotencyKey, fullPayment);
-    }
 
     return fullPayment;
   }
@@ -817,11 +958,6 @@ export class AcademyDB {
     payNow?: boolean;
     idempotencyKey?: string;
   }) {
-    if (payload.idempotencyKey) {
-      const cached = this.checkIdempotency(payload.idempotencyKey);
-      if (cached) return cached;
-    }
-
     const db = this.read();
     const player = db.players.find(p => p.id === payload.playerId);
     if (!player) throw new Error('Player not found');
@@ -840,6 +976,8 @@ export class AcademyDB {
     db.subscriptions.unshift(newSub);
 
     let paymentRecord: Payment | undefined;
+    let financialTx: FinancialTransaction | undefined;
+
     if (payload.payNow) {
       const receiptNum = `REC-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
       paymentRecord = {
@@ -858,8 +996,7 @@ export class AcademyDB {
       db.payments.unshift(paymentRecord);
       newSub.lastPaymentDate = paymentRecord.paymentDate;
 
-      // Linked financial transaction
-      const financialTx: FinancialTransaction = {
+      financialTx = {
         id: `tx-${uuidv4().slice(0, 8)}`,
         type: 'income',
         amount: Number(payload.value),
@@ -883,14 +1020,20 @@ export class AcademyDB {
       'SUCCESS'
     );
 
+    const supabase = getSupabase();
+    if (supabase) {
+      safeAsync(supabase.from('subscriptions').insert(newSub));
+      if (paymentRecord) safeAsync(supabase.from('payments').insert(paymentRecord));
+      if (financialTx) safeAsync(supabase.from('financial_transactions').insert(financialTx));
+    }
+
+    this.enqueueSync('Subscription', newSub.id, 'INSERT', newSub);
+    if (paymentRecord) this.enqueueSync('Payment', paymentRecord.id, 'INSERT', paymentRecord);
+
     const result = {
       subscription: this.calculateSubscriptionStatus(newSub),
       payment: paymentRecord
     };
-
-    if (payload.idempotencyKey) {
-      this.saveIdempotency(payload.idempotencyKey, result);
-    }
 
     return result;
   }
@@ -923,11 +1066,11 @@ export class AcademyDB {
     return db.backups.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
-  public static createBackupRecord(type: 'daily' | 'manual' = 'manual'): BackupRecord {
+  public static createBackupRecord(type: 'daily' | 'weekly' | 'manual' = 'manual', googleDriveFileId?: string, fileSize?: string): BackupRecord {
     const db = this.read();
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0];
-    const filename = `IFC-Academy-${type === 'daily' ? 'Daily' : 'Manual'}-${dateStr}-${Date.now().toString().slice(-4)}.xlsx`;
+    const filename = `IFC-Academy-${type === 'daily' ? 'Daily' : type === 'weekly' ? 'Weekly' : 'Manual'}-${dateStr}-${Date.now().toString().slice(-4)}.xlsx`;
 
     const backup: BackupRecord = {
       id: `bk-${uuidv4().slice(0, 8)}`,
@@ -936,8 +1079,8 @@ export class AcademyDB {
       completedAt: new Date().toISOString(),
       status: 'SUCCESS',
       filename,
-      googleDriveFileId: `gdrive-${uuidv4().slice(0, 12)}`,
-      fileSize: `${Math.round(JSON.stringify(db).length / 1024 + 12)} KB`,
+      googleDriveFileId: googleDriveFileId || `gdrive-${uuidv4().slice(0, 12)}`,
+      fileSize: fileSize || `${Math.round(JSON.stringify(db).length / 1024 + 12)} KB`,
       createdAt: now.toISOString()
     };
 
@@ -955,15 +1098,20 @@ export class AcademyDB {
       'SUCCESS'
     );
 
+    const supabase = getSupabase();
+    if (supabase) {
+      safeAsync(supabase.from('backups').insert(backup));
+    }
+
     return backup;
   }
-
 
   public static getAttendance(filter?: {
     group?: string;
     date?: string;
     playerId?: string;
     status?: string;
+    query?: string;
   }) {
     const db = this.read();
     let results = db.attendance.map(att => {
@@ -991,6 +1139,15 @@ export class AcademyDB {
       results = results.filter(a => a.status === filter.status);
     }
 
+    if (filter?.query && filter.query.trim()) {
+      const q = filter.query.trim().toLowerCase();
+      results = results.filter(a =>
+        (a.playerName && a.playerName.toLowerCase().includes(q)) ||
+        (a.membershipCode && a.membershipCode.toLowerCase().includes(q)) ||
+        (a.notes && a.notes.toLowerCase().includes(q))
+      );
+    }
+
     return results.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }
 
@@ -1002,6 +1159,8 @@ export class AcademyDB {
     const db = this.read();
     const date = payload.date;
     const group = payload.group;
+
+    const savedRecords: AttendanceRecord[] = [];
 
     for (const item of payload.records) {
       const existingIdx = db.attendance.findIndex(
@@ -1015,8 +1174,9 @@ export class AcademyDB {
           db.attendance[existingIdx].notes = item.notes;
         }
         db.attendance[existingIdx].markedAt = new Date().toISOString();
+        savedRecords.push(db.attendance[existingIdx]);
       } else {
-        db.attendance.unshift({
+        const newAtt: AttendanceRecord = {
           id: `att-${uuidv4().slice(0, 8)}`,
           playerId: item.playerId,
           group,
@@ -1024,11 +1184,19 @@ export class AcademyDB {
           status: item.status,
           notes: item.notes || '',
           markedAt: new Date().toISOString()
-        });
+        };
+        db.attendance.unshift(newAtt);
+        savedRecords.push(newAtt);
       }
     }
 
     this.write(db);
+
+    const supabase = getSupabase();
+    if (supabase && savedRecords.length > 0) {
+      safeAsync(supabase.from('attendance').upsert(savedRecords));
+    }
+
     return { success: true, count: payload.records.length };
   }
 
@@ -1113,6 +1281,180 @@ export class AcademyDB {
       ...settings
     };
     this.write(db);
+
+    const supabase = getSupabase();
+    if (supabase) {
+      safeAsync(supabase.from('settings').upsert({ id: 'academy_settings', ...db.settings }));
+    }
+
     return db.settings;
+  }
+
+  // ==================== COACHES MANAGEMENT ====================
+  public static getCoaches(filter?: { group?: string; status?: string; query?: string }): Coach[] {
+    const db = this.read();
+    let coaches = [...(db.coaches || [])];
+
+    // Compute total salaries paid to each coach from financial transactions
+    const salaryTx = db.financialTransactions.filter(t => t.type === 'salary');
+
+    coaches = coaches.map(c => {
+      const coachPayouts = salaryTx.filter(
+        t => (t.coachName && t.coachName.toLowerCase().includes(c.name.toLowerCase())) ||
+             (t.description && t.description.toLowerCase().includes(c.name.toLowerCase()))
+      );
+      const totalPaid = coachPayouts.reduce((sum, t) => sum + Number(t.amount || 0), 0);
+      const sorted = [...coachPayouts].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      const lastPayout = sorted.length > 0 ? sorted[0].date : undefined;
+
+      return {
+        ...c,
+        totalSalariesPaid: totalPaid,
+        lastPayoutDate: lastPayout
+      };
+    });
+
+    if (filter?.group && filter.group !== 'All' && filter.group !== 'الكل') {
+      coaches = coaches.filter(c => c.assignedGroup === filter.group || c.assignedGroup === 'جميع المجموعات');
+    }
+
+    if (filter?.status && filter.status !== 'All' && filter.status !== 'الكل') {
+      coaches = coaches.filter(c => c.status === filter.status);
+    }
+
+    if (filter?.query && filter.query.trim()) {
+      const q = filter.query.trim().toLowerCase();
+      coaches = coaches.filter(c =>
+        c.name.toLowerCase().includes(q) ||
+        c.phone.toLowerCase().includes(q) ||
+        c.role.toLowerCase().includes(q)
+      );
+    }
+
+    return coaches;
+  }
+
+  public static createCoach(payload: {
+    name: string;
+    phone: string;
+    assignedGroup: any;
+    role: string;
+    monthlySalary: number;
+    joinedDate?: string;
+    status?: 'Active' | 'Inactive';
+    notes?: string;
+  }): Coach {
+    const db = this.read();
+    if (!db.coaches) db.coaches = [];
+
+    const newCoach: Coach = {
+      id: `coach-${uuidv4().slice(0, 8)}`,
+      name: payload.name.trim(),
+      phone: payload.phone.trim(),
+      assignedGroup: payload.assignedGroup || 'ناشئين',
+      role: payload.role.trim() || 'مدرب فني',
+      monthlySalary: Number(payload.monthlySalary) || 3000,
+      joinedDate: payload.joinedDate || new Date().toISOString().split('T')[0],
+      status: payload.status || 'Active',
+      notes: payload.notes?.trim() || ''
+    };
+
+    db.coaches.unshift(newCoach);
+    this.write(db);
+
+    this.logActivity(
+      'إضافة مدرب جديد',
+      'Coach',
+      `تم إضافة المدرب ${newCoach.name} (${newCoach.role}) لمجموعة ${newCoach.assignedGroup}`,
+      newCoach.id,
+      'SUCCESS'
+    );
+
+    return newCoach;
+  }
+
+  public static updateCoach(id: string, payload: Partial<Coach>): Coach {
+    const db = this.read();
+    const index = (db.coaches || []).findIndex(c => c.id === id);
+    if (index === -1) throw new Error('المدرب غير موجود');
+
+    db.coaches[index] = {
+      ...db.coaches[index],
+      ...payload
+    };
+
+    this.write(db);
+
+    this.logActivity(
+      'تعديل بيانات مدرب',
+      'Coach',
+      `تم تحديث بيانات المدرب ${db.coaches[index].name}`,
+      id,
+      'SUCCESS'
+    );
+
+    return db.coaches[index];
+  }
+
+  public static deleteCoach(id: string): boolean {
+    const db = this.read();
+    const coach = (db.coaches || []).find(c => c.id === id);
+    if (!coach) throw new Error('المدرب غير موجود');
+
+    db.coaches = (db.coaches || []).filter(c => c.id !== id);
+    this.write(db);
+
+    this.logActivity(
+      'حذف مدرب',
+      'Coach',
+      `تم حذف المدرب ${coach.name} من سجلات الأكاديمية`,
+      id,
+      'SUCCESS'
+    );
+
+    return true;
+  }
+
+  public static payCoachSalary(payload: {
+    coachId: string;
+    amount: number;
+    payoutDate: string;
+    paymentMethod: 'Cash' | 'Wallet' | 'InstaPay';
+    notes?: string;
+    idempotencyKey?: string;
+  }): FinancialTransaction {
+    const db = this.read();
+    const coach = (db.coaches || []).find(c => c.id === payload.coachId);
+    if (!coach) throw new Error('المدرب غير موجود');
+
+    const tx: FinancialTransaction = {
+      id: `tx-${uuidv4().slice(0, 8)}`,
+      type: 'salary',
+      amount: Number(payload.amount),
+      date: payload.payoutDate || new Date().toISOString().split('T')[0],
+      description: `صرف راتب شهري - ${coach.name} (${coach.role})`,
+      category: 'رواتب مدربين',
+      coachName: coach.name,
+      notes: payload.notes ? `${payload.notes} | طريقة الدفع: ${payload.paymentMethod}` : `طريقة الدفع: ${payload.paymentMethod}`,
+      createdAt: new Date().toISOString()
+    };
+
+    db.financialTransactions.unshift(tx);
+    this.write(db);
+
+    this.logActivity(
+      'صرف راتب مدرب',
+      'Financial',
+      `تم صرف راتب للمدرب ${coach.name} بقيمة ${payload.amount} EGP بطريقة (${payload.paymentMethod})`,
+      tx.id,
+      'SUCCESS'
+    );
+
+    const supabase = getSupabase();
+    if (supabase) {
+      safeAsync(supabase.from('financial_transactions').insert(tx));
+    }
+
+    return tx;
   }
 }

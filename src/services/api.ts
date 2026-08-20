@@ -11,7 +11,8 @@ import {
   ActivityLog,
   BackupRecord,
   Invoice,
-  FinancialOverviewStats
+  FinancialOverviewStats,
+  Coach
 } from '../types';
 
 const API_BASE = '/api';
@@ -220,13 +221,66 @@ export const api = {
     });
   },
 
+  // Coaches Management
+  getCoaches: async (params?: { group?: string; status?: string; query?: string }): Promise<Coach[]> => {
+    const searchParams = new URLSearchParams();
+    if (params?.group) searchParams.append('group', params.group);
+    if (params?.status) searchParams.append('status', params.status);
+    if (params?.query) searchParams.append('query', params.query);
+    const qs = searchParams.toString();
+    return fetchJson(`${API_BASE}/coaches${qs ? `?${qs}` : ''}`);
+  },
+
+  createCoach: async (data: {
+    name: string;
+    phone: string;
+    assignedGroup: string;
+    role: string;
+    monthlySalary: number;
+    joinedDate?: string;
+    status?: 'Active' | 'Inactive';
+    notes?: string;
+  }): Promise<Coach> => {
+    return fetchJson(`${API_BASE}/coaches`, {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+  },
+
+  updateCoach: async (id: string, data: Partial<Coach>): Promise<Coach> => {
+    return fetchJson(`${API_BASE}/coaches/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    });
+  },
+
+  deleteCoach: async (id: string): Promise<{ success: boolean; message: string }> => {
+    return fetchJson(`${API_BASE}/coaches/${id}`, {
+      method: 'DELETE'
+    });
+  },
+
+  payCoachSalary: async (data: {
+    coachId: string;
+    amount: number;
+    payoutDate: string;
+    paymentMethod: string;
+    notes?: string;
+  }): Promise<FinancialTransaction> => {
+    return fetchJson(`${API_BASE}/coaches/payout`, {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+  },
+
   // Attendance
-  getAttendance: async (params?: { group?: string; date?: string; playerId?: string; status?: string }): Promise<AttendanceRecord[]> => {
+  getAttendance: async (params?: { group?: string; date?: string; playerId?: string; status?: string; query?: string }): Promise<AttendanceRecord[]> => {
     const searchParams = new URLSearchParams();
     if (params?.group) searchParams.append('group', params.group);
     if (params?.date) searchParams.append('date', params.date);
     if (params?.playerId) searchParams.append('playerId', params.playerId);
     if (params?.status) searchParams.append('status', params.status);
+    if (params?.query) searchParams.append('query', params.query);
     const qs = searchParams.toString();
     return fetchJson(`${API_BASE}/attendance${qs ? `?${qs}` : ''}`);
   },
@@ -287,8 +341,28 @@ export const api = {
     return fetchJson(`${API_BASE}/supabase/status`);
   },
 
+  testSupabaseConnection: async (supabaseUrl: string, supabaseKey: string): Promise<{ success: boolean; message: string; error?: string }> => {
+    return fetchJson(`${API_BASE}/supabase/test`, {
+      method: 'POST',
+      body: JSON.stringify({ supabaseUrl, supabaseKey })
+    });
+  },
+
+  configureSupabase: async (supabaseUrl: string, supabaseKey: string): Promise<{ success: boolean; message: string; warning?: string }> => {
+    return fetchJson(`${API_BASE}/supabase/config`, {
+      method: 'POST',
+      body: JSON.stringify({ supabaseUrl, supabaseKey })
+    });
+  },
+
   syncWithSupabase: async (): Promise<{ success: boolean; message: string; results?: Record<string, string> }> => {
     return fetchJson(`${API_BASE}/supabase/sync`, {
+      method: 'POST'
+    });
+  },
+
+  syncGoogleSheets: async (): Promise<{ success: boolean; message: string }> => {
+    return fetchJson(`${API_BASE}/google/sync-all`, {
       method: 'POST'
     });
   },

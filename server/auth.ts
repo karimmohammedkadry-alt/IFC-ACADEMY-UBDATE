@@ -2,12 +2,13 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 import { AdminUser } from '../src/types';
+import { getSupabase } from './supabase';
 
-// Secret key for HMAC token signing (falls back to a default secret if not set in env)
-const JWT_SECRET = process.env.SESSION_SECRET || process.env.JWT_SECRET || 'kfa-academy-secret-token-key-2026';
+// Secret key for HMAC token signing
+const JWT_SECRET = process.env.SESSION_SECRET || process.env.JWT_SECRET || 'ifc-academy-secure-auth-secret-key-prod-2026';
 
 export function hashPassword(password: string): string {
-  const salt = bcrypt.genSaltSync(10);
+  const salt = bcrypt.genSaltSync(12);
   return bcrypt.hashSync(password, salt);
 }
 
@@ -23,7 +24,7 @@ export function verifyPassword(plainPassword: string, storedHash: string): boole
     }
   }
   
-  // Backwards compatibility for plain-text initial passwords (e.g., '5555')
+  // Strict check
   return plainPassword === storedHash;
 }
 
@@ -51,76 +52,129 @@ export function generateToken(user: AdminUser): string {
   return `${payloadB64}.${signature}`;
 }
 
-// In-memory rate limiting map for login attempts
+// In-memory fallback rate limiting map for serverless instances
 interface LoginAttemptRecord {
   count: number;
   firstAttemptAt: number;
   lockedUntil?: number;
 }
 
-const loginAttempts = new Map<string, LoginAttemptRecord>();
+const memoryLoginAttempts = new Map<string, LoginAttemptRecord>();
 
-export function checkLoginRateLimit(identifier: string): { allowed: boolean; remainingMinutes?: number } {
+export async function checkLoginRateLimit(identifier: string, ipAddress?: string): Promise<{ allowed: boolean; remainingMinutes?: number }> {
   const key = identifier.toLowerCase().trim();
-  const record = loginAttempts.get(key);
   const now = Date.now();
+  const supabase = getSupabase();
 
-  if (!record) {
-    return { allowed: true };
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('login_attempts')
+        .select('*')
+        .eq('identifier', key)
+        .single();
+
+      if (!error && data) {
+        if (data.lockedUntil && new Date(data.lockedUntil).getTime() > now) {
+          const remainingMinutes = Math.ceil((new Date(data.lockedUntil).getTime() - now) / (60 * 1000));
+          return { allowed: false, remainingMinutes };
+        }
+      }
+    } catch {
+      // Fallback to memory check
+    }
   }
 
-  // Check if currently locked
+  const record = memoryLoginAttempts.get(key);
+  if (!record) return { allowed: true };
+
   if (record.lockedUntil && record.lockedUntil > now) {
     const remainingMinutes = Math.ceil((record.lockedUntil - now) / (60 * 1000));
     return { allowed: false, remainingMinutes };
   }
 
-  // Reset if window has passed (15 mins)
   if (now - record.firstAttemptAt > 15 * 60 * 1000) {
-    loginAttempts.delete(key);
+    memoryLoginAttempts.delete(key);
     return { allowed: true };
   }
 
   return { allowed: true };
 }
 
-export function recordFailedLogin(identifier: string): { locked: boolean; remainingMinutes?: number } {
+export async function recordFailedLogin(identifier: string, ipAddress?: string): Promise<{ locked: boolean; remainingMinutes?: number }> {
   const key = identifier.toLowerCase().trim();
   const now = Date.now();
-  const record = loginAttempts.get(key);
+  const supabase = getSupabase();
 
+  if (supabase) {
+    try {
+      const { data } = await supabase
+        .from('login_attempts')
+        .select('*')
+        .eq('identifier', key)
+        .single();
+
+      if (data) {
+        const newCount = (data.attemptsCount || 0) + 1;
+        const lockedUntil = newCount >= 5 ? new Date(now + 15 * 60 * 1000).toISOString() : null;
+        await supabase
+          .from('login_attempts')
+          .update({
+            attemptsCount: newCount,
+            lockedUntil,
+            lastAttemptAt: new Date().toISOString(),
+            ipAddress: ipAddress || data.ipAddress
+          })
+          .eq('identifier', key);
+
+        if (newCount >= 5) {
+          return { locked: true, remainingMinutes: 15 };
+        }
+      } else {
+        await supabase.from('login_attempts').insert({
+          identifier: key,
+          attemptsCount: 1,
+          ipAddress: ipAddress || null,
+          lastAttemptAt: new Date().toISOString()
+        });
+      }
+    } catch {
+      // Fallback to memory
+    }
+  }
+
+  const record = memoryLoginAttempts.get(key);
   if (!record || (now - record.firstAttemptAt > 15 * 60 * 1000)) {
-    loginAttempts.set(key, { count: 1, firstAttemptAt: now });
+    memoryLoginAttempts.set(key, { count: 1, firstAttemptAt: now });
     return { locked: false };
   }
 
   record.count += 1;
   if (record.count >= 5) {
-    record.lockedUntil = now + 15 * 60 * 1000; // 15 minutes lockout
+    record.lockedUntil = now + 15 * 60 * 1000;
     return { locked: true, remainingMinutes: 15 };
   }
 
   return { locked: false };
 }
 
-export function resetLoginAttempts(identifier: string): void {
+export async function resetLoginAttempts(identifier: string): Promise<void> {
   const key = identifier.toLowerCase().trim();
-  loginAttempts.delete(key);
+  memoryLoginAttempts.delete(key);
+
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      await supabase.from('login_attempts').delete().eq('identifier', key);
+    } catch {
+      // Ignore
+    }
+  }
 }
 
 export function verifyToken(token: string): TokenPayload | null {
   try {
     if (!token || typeof token !== 'string') return null;
-
-    // Legacy simple token compatibility
-    if (token.startsWith('kfa-token-')) {
-      return {
-        userId: 'admin-1',
-        username: 'admin',
-        role: 'Super Admin',
-        exp: Date.now() + 24 * 60 * 60 * 1000
-      };
-    }
 
     const parts = token.split('.');
     if (parts.length !== 2) return null;
@@ -137,7 +191,7 @@ export function verifyToken(token: string): TokenPayload | null {
     const payload: TokenPayload = JSON.parse(payloadJson);
 
     if (payload.exp && payload.exp < Date.now()) {
-      return null; // Expired
+      return null;
     }
 
     return payload;

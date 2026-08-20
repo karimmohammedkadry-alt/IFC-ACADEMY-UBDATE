@@ -140,7 +140,7 @@ export interface ActivityLog {
 
 export interface BackupRecord {
   id: string;
-  type: 'daily' | 'manual';
+  type: 'daily' | 'weekly' | 'manual';
   startedAt: string;
   completedAt?: string;
   status: 'RUNNING' | 'SUCCESS' | 'FAILED';
@@ -186,5 +186,29 @@ export interface FinancialOverviewStats {
   netBalance: number;
   paymentsCount: number;
   transactionsCount: number;
+}
+
+export interface Coach {
+  id: string;
+  name: string;
+  phone: string;
+  assignedGroup: PlayerGroup | 'جميع المجموعات';
+  role: string;
+  monthlySalary: number;
+  joinedDate: string;
+  status: 'Active' | 'Inactive';
+  notes?: string;
+  totalSalariesPaid?: number;
+  lastPayoutDate?: string;
+}
+
+export interface CoachSalaryPayout {
+  id: string;
+  coachId: string;
+  coachName: string;
+  amount: number;
+  payoutDate: string;
+  notes?: string;
+  paymentMethod: PaymentMethod;
 }
 

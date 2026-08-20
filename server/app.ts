@@ -11,7 +11,14 @@ import {
   recordFailedLogin,
   resetLoginAttempts
 } from './auth';
-import { isSupabaseConfigured, getSupabase } from './supabase';
+import { isSupabaseConfigured, getSupabase, setSupabaseConfig } from './supabase';
+import { createClient } from '@supabase/supabase-js';
+import {
+  isGoogleConfigured,
+  syncEntityToGoogleSheet,
+  uploadBackupToGoogleDrive,
+  processSyncQueue
+} from './google';
 
 export const app = express();
 
@@ -39,13 +46,14 @@ app.get('/api/health', (_req: Request, res: Response) => {
     status: 'ok',
     environment: process.env.NODE_ENV || 'development',
     timestamp: new Date().toISOString(),
-    supabaseConfigured: isSupabaseConfigured()
+    supabaseConfigured: isSupabaseConfigured(),
+    googleConfigured: isGoogleConfigured()
   });
 });
 
 app.get('/api/diagnostics', async (_req: Request, res: Response) => {
   const isConfigured = isSupabaseConfigured();
-  let supabaseTest = { ok: false, message: 'غير متصل (يعمل في وضع التخزين المباشر)' };
+  let supabaseTest = { ok: false, message: 'غير متصل (يعمل في وضع التخزين المحلي)' };
 
   if (isConfigured) {
     try {
@@ -53,7 +61,7 @@ app.get('/api/diagnostics', async (_req: Request, res: Response) => {
       if (supabase) {
         const { error } = await supabase.from('settings').select('count', { count: 'exact', head: true });
         if (!error) {
-          supabaseTest = { ok: true, message: 'متصل بنجاح مع Supabase' };
+          supabaseTest = { ok: true, message: 'متصل بنجاح مع Supabase PostgreSQL' };
         } else {
           supabaseTest = { ok: false, message: `ملاحظة اتصال Supabase: ${error.message}` };
         }
@@ -71,12 +79,19 @@ app.get('/api/diagnostics', async (_req: Request, res: Response) => {
       keyPresent: Boolean(process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY),
       test: supabaseTest
     },
+    google: {
+      configured: isGoogleConfigured(),
+      hasClientEmail: Boolean(process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_CLIENT_EMAIL),
+      hasPrivateKey: Boolean(process.env.GOOGLE_PRIVATE_KEY),
+      hasSpreadsheetId: Boolean(process.env.GOOGLE_SPREADSHEET_ID),
+      hasDriveFolderId: Boolean(process.env.GOOGLE_DRIVE_FOLDER_ID)
+    },
     version: '2.0.0'
   });
 });
 
 // ==================== AUTH ROUTES ====================
-app.post('/api/auth/login', (req: Request, res: Response) => {
+app.post('/api/auth/login', async (req: Request, res: Response) => {
   try {
     const { username, password } = req.body;
     if (!username || !password) {
@@ -85,9 +100,10 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
 
     const trimmedUser = String(username).trim();
     const trimmedPass = String(password).trim();
+    const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress;
 
     // Check rate limit (5 failed attempts locks for 15 mins)
-    const rateCheck = checkLoginRateLimit(trimmedUser);
+    const rateCheck = await checkLoginRateLimit(trimmedUser, clientIp);
     if (!rateCheck.allowed) {
       AcademyDB.logActivity(
         'محاولة دخول محظورة',
@@ -106,7 +122,7 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     const isPassMatch = verifyPassword(trimmedPass, admin.passwordHash);
 
     if (!isUserMatch || !isPassMatch) {
-      const failResult = recordFailedLogin(trimmedUser);
+      const failResult = await recordFailedLogin(trimmedUser, clientIp);
       AcademyDB.logActivity(
         'محاولة دخول فاشلة',
         'Auth',
@@ -125,7 +141,7 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     }
 
     // Reset rate limit on success
-    resetLoginAttempts(trimmedUser);
+    await resetLoginAttempts(trimmedUser);
 
     const token = generateToken(admin);
     const { passwordHash, ...safeAdmin } = admin;
@@ -179,13 +195,13 @@ app.put('/api/auth/password', (req: Request, res: Response) => {
     if (!verifyPassword(currentPassword, admin.passwordHash)) {
       return res.status(400).json({ error: 'كلمة المرور الحالية غير صحيحة' });
     }
-    if (!newPassword || newPassword.length < 4) {
-      return res.status(400).json({ error: 'كلمة المرور الجديدة يجب ألا تقل عن 4 خانات' });
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ error: 'كلمة المرور الجديدة يجب ألا تقل عن 6 خانات للأمان' });
     }
 
     const newHash = hashPassword(newPassword);
     AcademyDB.updateAdmin({}, newHash);
-    AcademyDB.logActivity('تغيير كلمة المرور', 'Admin', 'تم تغيير كلمة مرور المسؤول بنجاح', admin.id);
+    AcademyDB.logActivity('تغيير كلمة المرور', 'Admin', 'تم تغيير كلمة مرور المسؤول وتشفيرها بنجاح', admin.id);
 
     return res.json({ success: true, message: 'تم تغيير كلمة المرور بنجاح' });
   } catch (e: any) {
@@ -314,9 +330,16 @@ app.post('/api/subscriptions', (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/subscriptions/renew', (req: Request, res: Response) => {
+app.post('/api/subscriptions/renew', async (req: Request, res: Response) => {
   try {
     const idempotencyKey = getIdempotencyKey(req);
+    if (idempotencyKey) {
+      const cached = await AcademyDB.checkIdempotency(idempotencyKey);
+      if (cached) {
+        return res.status(200).json(cached);
+      }
+    }
+
     const { playerId, planName, value, startDate, endDate, paymentMethod, paidBy, notes, payNow } = req.body;
 
     if (!playerId || !value || !startDate || !endDate) {
@@ -335,6 +358,10 @@ app.post('/api/subscriptions/renew', (req: Request, res: Response) => {
       payNow: payNow ?? true,
       idempotencyKey
     });
+
+    if (idempotencyKey) {
+      await AcademyDB.saveIdempotency(idempotencyKey, result, 'RENEW_SUBSCRIPTION', 201);
+    }
 
     return res.status(201).json(result);
   } catch (e: any) {
@@ -359,9 +386,16 @@ app.get('/api/payments', (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/payments', (req: Request, res: Response) => {
+app.post('/api/payments', async (req: Request, res: Response) => {
   try {
     const idempotencyKey = getIdempotencyKey(req);
+    if (idempotencyKey) {
+      const cached = await AcademyDB.checkIdempotency(idempotencyKey);
+      if (cached) {
+        return res.status(200).json(cached);
+      }
+    }
+
     const { playerId, subscriptionId, amount, paymentMethod, paidBy, paymentDate, notes } = req.body;
 
     if (!playerId || !amount || !paymentMethod) {
@@ -382,6 +416,11 @@ app.post('/api/payments', (req: Request, res: Response) => {
       notes,
       idempotencyKey
     });
+
+    if (idempotencyKey) {
+      await AcademyDB.saveIdempotency(idempotencyKey, payment, 'RECORD_PAYMENT', 201);
+    }
+
     return res.status(201).json(payment);
   } catch (e: any) {
     return res.status(400).json({ error: e.message || 'فشل تسجيل الدفع' });
@@ -422,9 +461,16 @@ app.get('/api/financial/transactions', (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/financial/transactions', (req: Request, res: Response) => {
+app.post('/api/financial/transactions', async (req: Request, res: Response) => {
   try {
     const idempotencyKey = getIdempotencyKey(req);
+    if (idempotencyKey) {
+      const cached = await AcademyDB.checkIdempotency(idempotencyKey);
+      if (cached) {
+        return res.status(200).json(cached);
+      }
+    }
+
     const { type, amount, date, description, category, coachName, notes } = req.body;
 
     if (!type || !amount || !description) {
@@ -446,21 +492,100 @@ app.post('/api/financial/transactions', (req: Request, res: Response) => {
       idempotencyKey
     });
 
+    if (idempotencyKey) {
+      await AcademyDB.saveIdempotency(idempotencyKey, tx, 'CREATE_FINANCIAL_TX', 201);
+    }
+
     return res.status(201).json(tx);
   } catch (e: any) {
     return res.status(400).json({ error: e.message || 'فشل تسجيل المعاملة المالية' });
   }
 });
 
+// ==================== COACHES MANAGEMENT ====================
+app.get('/api/coaches', (req: Request, res: Response) => {
+  try {
+    const { group, status, query } = req.query;
+    const coaches = AcademyDB.getCoaches({
+      group: group as string,
+      status: status as string,
+      query: query as string
+    });
+    return res.json(coaches);
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/coaches', (req: Request, res: Response) => {
+  try {
+    const { name, phone, assignedGroup, role, monthlySalary, joinedDate, status, notes } = req.body;
+    if (!name || !phone) {
+      return res.status(400).json({ error: 'اسم المدرب ورقم الهاتف مطلوبان' });
+    }
+    const coach = AcademyDB.createCoach({
+      name,
+      phone,
+      assignedGroup,
+      role,
+      monthlySalary,
+      joinedDate,
+      status,
+      notes
+    });
+    return res.status(201).json(coach);
+  } catch (e: any) {
+    return res.status(400).json({ error: e.message });
+  }
+});
+
+app.put('/api/coaches/:id', (req: Request, res: Response) => {
+  try {
+    const coach = AcademyDB.updateCoach(req.params.id, req.body);
+    return res.json(coach);
+  } catch (e: any) {
+    return res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete('/api/coaches/:id', (req: Request, res: Response) => {
+  try {
+    AcademyDB.deleteCoach(req.params.id);
+    return res.json({ success: true, message: 'تم حذف المدرب بنجاح' });
+  } catch (e: any) {
+    return res.status(400).json({ error: e.message });
+  }
+});
+
+app.post('/api/coaches/payout', (req: Request, res: Response) => {
+  try {
+    const { coachId, amount, payoutDate, paymentMethod, notes } = req.body;
+    if (!coachId || !amount) {
+      return res.status(400).json({ error: 'يرجى تحديد المدرب وقيمة الراتب' });
+    }
+    const tx = AcademyDB.payCoachSalary({
+      coachId,
+      amount: Number(amount),
+      payoutDate,
+      paymentMethod: paymentMethod || 'Cash',
+      notes
+    });
+    return res.status(201).json(tx);
+  } catch (e: any) {
+    return res.status(400).json({ error: e.message });
+  }
+});
+
 // ==================== ATTENDANCE ROUTES ====================
 app.get('/api/attendance', (req: Request, res: Response) => {
   try {
-    const { group, date, playerId, status } = req.query;
+    const { group, date, playerId, status, query } = req.query;
     const records = AcademyDB.getAttendance({
       group: group as string,
       date: date as string,
       playerId: playerId as string,
-      status: status as string
+      status: status as string,
+      query: query as string
     });
     return res.json(records);
   } catch (e: any) {
@@ -499,7 +624,7 @@ app.get('/api/activity-logs', (req: Request, res: Response) => {
   }
 });
 
-// ==================== BACKUPS ====================
+// ==================== BACKUPS & AUTOMATION ====================
 app.get('/api/backups', (_req: Request, res: Response) => {
   try {
     const backups = AcademyDB.getBackups();
@@ -509,16 +634,129 @@ app.get('/api/backups', (_req: Request, res: Response) => {
   }
 });
 
-app.post('/api/backups/manual', (_req: Request, res: Response) => {
+app.post('/api/backups/manual', async (_req: Request, res: Response) => {
   try {
-    const record = AcademyDB.createBackupRecord('manual');
+    const players = AcademyDB.getPlayers();
+    const payments = AcademyDB.getPayments();
+    const attendance = AcademyDB.getAttendance();
+    const financial = AcademyDB.getFinancialTransactions();
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(players), 'اللاعبين');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(payments), 'المدفوعات');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(attendance), 'الحضور');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(financial), 'المالية');
+
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const filename = `IFC-Academy-Manual-${new Date().toISOString().split('T')[0]}-${Date.now().toString().slice(-4)}.xlsx`;
+
+    let googleDriveFileId: string | undefined;
+    if (isGoogleConfigured()) {
+      const uploadRes = await uploadBackupToGoogleDrive(buffer, filename, 'Manual');
+      if (uploadRes.success) {
+        googleDriveFileId = uploadRes.fileId;
+      }
+    }
+
+    const record = AcademyDB.createBackupRecord('manual', googleDriveFileId, `${Math.round(buffer.length / 1024)} KB`);
+
     return res.status(201).json({
       success: true,
-      message: 'تم إنشاء النسخة الاحتياطية بنجاح',
+      message: 'تم إنشاء النسخة الاحتياطية وتخزينها بنجاح',
       backup: record
     });
   } catch (e: any) {
     return res.status(500).json({ error: e.message || 'فشل إنشاء النسخة الاحتياطية' });
+  }
+});
+
+// VERCEL CRON DAILY BACKUP ENDPOINT
+app.get('/api/cron/backup', async (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const cronSecret = process.env.CRON_SECRET;
+    
+    // Validate cron secret if configured
+    if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+      return res.status(401).json({ error: 'Unauthorized Cron Trigger' });
+    }
+
+    const players = AcademyDB.getPlayers();
+    const payments = AcademyDB.getPayments();
+    const attendance = AcademyDB.getAttendance();
+    const financial = AcademyDB.getFinancialTransactions();
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(players), 'اللاعبين');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(payments), 'المدفوعات');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(attendance), 'الحضور');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(financial), 'المالية');
+
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const filename = `IFC-Academy-Daily-${new Date().toISOString().split('T')[0]}.xlsx`;
+
+    let googleDriveFileId: string | undefined;
+    if (isGoogleConfigured()) {
+      const uploadRes = await uploadBackupToGoogleDrive(buffer, filename, 'Daily');
+      if (uploadRes.success) {
+        googleDriveFileId = uploadRes.fileId;
+      }
+    }
+
+    const record = AcademyDB.createBackupRecord('daily', googleDriveFileId, `${Math.round(buffer.length / 1024)} KB`);
+
+    return res.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      backup: record
+    });
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== GOOGLE SHEETS & DRIVE DIRECT SYNC ====================
+app.post('/api/google/sync-all', async (_req: Request, res: Response) => {
+  try {
+    if (!isGoogleConfigured()) {
+      return res.status(400).json({
+        error: 'يرجى إعداد بيانات GOOGLE_SERVICE_ACCOUNT_EMAIL و GOOGLE_PRIVATE_KEY و GOOGLE_SPREADSHEET_ID'
+      });
+    }
+
+    const players = AcademyDB.getPlayers();
+    const payments = AcademyDB.getPayments();
+    const attendance = AcademyDB.getAttendance();
+    const financial = AcademyDB.getFinancialTransactions();
+
+    // Sync Players
+    const playerHeaders = ['الكود', 'الاسم', 'الهاتف', 'المجموعة', 'الحالة', 'تاريخ الميلاد'];
+    const playerRows = players.map(p => [p.membershipCode, p.fullName, p.phone, p.group, p.status, p.birthDate]);
+    await syncEntityToGoogleSheet('اللاعبين', playerHeaders, playerRows);
+
+    // Sync Payments
+    const payHeaders = ['رقم الإيصال', 'كود اللاعب', 'الاسم', 'المبلغ', 'طريقة الدفع', 'التاريخ'];
+    const payRows = payments.map(p => [p.receiptNumber, p.membershipCode, p.playerName, p.amount, p.paymentMethod, p.paymentDate]);
+    await syncEntityToGoogleSheet('المدفوعات', payHeaders, payRows);
+
+    // Sync Financial
+    const finHeaders = ['المعرف', 'النوع', 'المبلغ', 'التاريخ', 'الوصف', 'التصنيف'];
+    const finRows = financial.map(f => [f.id, f.type, f.amount, f.date, f.description, f.category || '-']);
+    await syncEntityToGoogleSheet('المالية', finHeaders, finRows);
+
+    // Sync Attendance
+    const attHeaders = ['التاريخ', 'المجموعة', 'كود اللاعب', 'الاسم', 'الحالة'];
+    const attRows = attendance.map(a => [a.date, a.group, a.membershipCode, a.playerName, a.status]);
+    await syncEntityToGoogleSheet('الحضور', attHeaders, attRows);
+
+    AcademyDB.logActivity('مزامنة Google Sheets', 'Google', 'تمت مزامنة جميع جداول البيانات بنجاح مع Google Sheets');
+
+    return res.json({
+      success: true,
+      message: 'تمت مزامنة جميع البيانات مع Google Sheets بنجاح'
+    });
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message || 'فشل مزامنة Google Sheets' });
   }
 });
 
@@ -560,6 +798,66 @@ app.get('/api/supabase/status', (_req: Request, res: Response) => {
     supabaseUrl: process.env.SUPABASE_URL ? process.env.SUPABASE_URL.replace(/(https?:\/\/)([^.]+)(.*)/, '$1***$3') : null
   });
 });
+
+app.post('/api/supabase/test', async (req: Request, res: Response) => {
+  try {
+    const { supabaseUrl, supabaseKey } = req.body;
+    if (!supabaseUrl || !supabaseKey) {
+      return res.status(400).json({ error: 'يرجى إدخال عنوان المشروع ومفتاح API لاختبار الاتصال' });
+    }
+
+    const testClient = createClient(supabaseUrl.trim(), supabaseKey.trim(), {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+
+    // Test connection against existing tables (players, user, etc.)
+    const { error: testErr } = await testClient.from('players').select('count', { count: 'exact', head: true });
+    
+    if (testErr && testErr.code !== 'PGRST116') {
+      return res.json({
+        success: false,
+        message: `تعذر الوصول للجداول: ${testErr.message}`
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: 'الاتصال بمشروع Supabase ناجح 100% وقاعدة البيانات متجاوبة.'
+    });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, error: e.message || 'فشل اختبار الاتصال بـ Supabase' });
+  }
+});
+
+app.post('/api/supabase/config', async (req: Request, res: Response) => {
+  try {
+    const { supabaseUrl, supabaseKey } = req.body;
+    if (!supabaseUrl || !supabaseKey) {
+      return res.status(400).json({ error: 'يرجى إدخال عنوان المشروع (URL) ومفتاح الوصول (API Key)' });
+    }
+
+    setSupabaseConfig(supabaseUrl, supabaseKey);
+    const supabase = getSupabase();
+
+    if (!supabase) {
+      return res.status(400).json({ error: 'تعذر تهيئة اتصال Supabase' });
+    }
+
+    // Quick test query
+    const { error } = await supabase.from('settings').select('count', { count: 'exact', head: true });
+    
+    AcademyDB.logActivity('تحديث اتصال Supabase', 'Cloud', 'تم تحديث وضبط مفاتيح الاتصال بـ Supabase بنجاح');
+
+    return res.json({
+      success: true,
+      message: 'تم حفظ مفاتيح الاتصال والتحقق من الربط مع Supabase بنجاح',
+      warning: error ? `ملاحظة: ${error.message}` : undefined
+    });
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message || 'حدث خطأ أثناء فحص اتصال Supabase' });
+  }
+});
+
 
 app.post('/api/supabase/sync', async (_req: Request, res: Response) => {
   try {

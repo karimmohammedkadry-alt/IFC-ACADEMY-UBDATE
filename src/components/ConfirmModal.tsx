@@ -10,7 +10,8 @@ interface ConfirmModalProps {
   cancelText?: string;
   isDanger?: boolean;
   onConfirm: () => void;
-  onClose: () => void;
+  onClose?: () => void;
+  onCancel?: () => void;
 }
 
 export const ConfirmModal: React.FC<ConfirmModalProps> = ({
@@ -21,9 +22,25 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
   cancelText = 'إلغاء',
   isDanger = true,
   onConfirm,
-  onClose
+  onClose,
+  onCancel
 }) => {
   if (!isOpen) return null;
+
+  const handleClose = () => {
+    if (typeof onClose === 'function') {
+      onClose();
+    } else if (typeof onCancel === 'function') {
+      onCancel();
+    }
+  };
+
+  const handleConfirm = () => {
+    if (typeof onConfirm === 'function') {
+      onConfirm();
+    }
+    handleClose();
+  };
 
   return (
     <AnimatePresence>
@@ -33,7 +50,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          onClick={onClose}
+          onClick={handleClose}
           className="fixed inset-0 bg-black/80 backdrop-blur-sm"
         />
 
@@ -61,17 +78,14 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
               <div className="flex items-center justify-end gap-3">
                 <button
                   type="button"
-                  onClick={onClose}
+                  onClick={handleClose}
                   className="px-4 py-2.5 rounded-xl text-sm font-medium text-zinc-300 hover:text-white bg-[#151518] hover:bg-[#1f1f23] transition-colors border border-[#1f1f23] cursor-pointer"
                 >
                   {cancelText}
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    onConfirm();
-                    onClose();
-                  }}
+                  onClick={handleConfirm}
                   className={`px-5 py-2.5 rounded-xl text-sm font-black transition-all transform active:scale-95 cursor-pointer ${
                     isDanger
                       ? 'bg-rose-500 hover:bg-rose-400 text-white shadow-lg shadow-rose-900/30'
@@ -85,7 +99,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
           </div>
 
           <button
-            onClick={onClose}
+            onClick={handleClose}
             className="absolute top-4 left-4 p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-[#151518] transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />

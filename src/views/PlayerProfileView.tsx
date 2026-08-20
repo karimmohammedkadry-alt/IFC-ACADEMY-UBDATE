@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   ArrowRight,
   User,
@@ -9,11 +9,12 @@ import {
   CalendarCheck,
   Edit,
   Trash2,
-  PlusCircle,
-  Clock,
   Receipt,
-  FileSpreadsheet,
-  AlertCircle
+  AlertCircle,
+  MessageCircle,
+  Send,
+  X,
+  Check
 } from 'lucide-react';
 import { Player, Subscription, Payment, AttendanceRecord } from '../types';
 import { StatusBadge } from '../components/StatusBadge';
@@ -25,21 +26,23 @@ interface PlayerProfileViewProps {
   playerId: string;
   onBack: () => void;
   onEditPlayer: (player: Player) => void;
-  onOpenAddPayment: (player: Player) => void;
+  onOpenAddPayment?: (player: Player) => void;
 }
 
 export const PlayerProfileView: React.FC<PlayerProfileViewProps> = ({
   playerId,
   onBack,
-  onEditPlayer,
-  onOpenAddPayment
+  onEditPlayer
 }) => {
   const { success, error } = useToast();
   const [player, setPlayer] = useState<(Player & { subscriptions: Subscription[]; payments: Payment[]; attendance: AttendanceRecord[] }) | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [isRenewModalOpen, setIsRenewModalOpen] = useState(false);
-  const [renewFee, setRenewFee] = useState(500);
+
+  // WhatsApp message modal state
+  const [isMessageModalOpen, setIsMessageModalOpen] = useState(false);
+  const [messageTarget, setMessageTarget] = useState<'player' | 'parent'>('player');
+  const [customMessage, setCustomMessage] = useState('');
 
   const loadPlayerData = async () => {
     setIsLoading(true);
@@ -70,29 +73,28 @@ export const PlayerProfileView: React.FC<PlayerProfileViewProps> = ({
     }
   };
 
-  const handleRenewSubscription = async () => {
+  const handleOpenMessageModal = (target: 'player' | 'parent' = 'player') => {
     if (!player) return;
-    try {
-      const now = new Date();
-      const startDate = now.toISOString().split('T')[0];
-      const nextMonth = new Date(now);
-      nextMonth.setMonth(nextMonth.getMonth() + 1);
-      const endDate = nextMonth.toISOString().split('T')[0];
+    setMessageTarget(target);
+    const targetName = target === 'parent' && player.parent ? player.parent.parentName : player.fullName;
+    const defaultText = `مرحباً ${targetName}، نود تذكيركم بخصوص اشتراك اللاعب ${player.fullName} في أكاديمية IFC. نرجو التواصل مع إدارة الأكاديمية لمتابعة التدريبات. شكراً لكم!`;
+    setCustomMessage(defaultText);
+    setIsMessageModalOpen(true);
+  };
 
-      await api.createSubscription({
-        playerId: player.id,
-        planName: 'اشتراك شهري',
-        value: renewFee,
-        startDate,
-        endDate
-      });
-
-      success('تم إنشاء دورة اشتراك شهرية جديدة بنجاح');
-      setIsRenewModalOpen(false);
-      loadPlayerData();
-    } catch (err: any) {
-      error(err.message || 'فشل تجديد الاشتراك');
+  const handleSendWhatsApp = () => {
+    if (!player) return;
+    const rawPhone = messageTarget === 'parent' && player.parent ? player.parent.parentPhone : player.phone;
+    if (!rawPhone || !rawPhone.trim()) {
+      error('رقم الهاتف غير متوفر');
+      return;
     }
+    const cleanPhone = rawPhone.replace(/[^0-9]/g, '');
+    const formattedPhone = cleanPhone.startsWith('0') ? `2${cleanPhone}` : cleanPhone;
+    const url = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(customMessage)}`;
+    window.open(url, '_blank');
+    success('تم فتح تطبيق واتساب لإرسال الرسالة');
+    setIsMessageModalOpen(false);
   };
 
   if (isLoading) {
@@ -149,39 +151,30 @@ export const PlayerProfileView: React.FC<PlayerProfileViewProps> = ({
         {/* Action Buttons */}
         <div className="flex items-center flex-wrap gap-2.5">
           <button
-            id="btn-profile-add-payment"
-            onClick={() => onOpenAddPayment(player)}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-yellow-400 via-amber-400 to-yellow-500 hover:from-yellow-300 hover:to-yellow-400 text-black font-black text-xs sm:text-sm shadow-md shadow-yellow-500/20 cursor-pointer"
+            onClick={() => handleOpenMessageModal(player.group === 'شباب' ? 'player' : 'parent')}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/30 font-bold text-xs sm:text-sm transition-colors cursor-pointer shadow-sm"
           >
-            <CreditCard className="w-4 h-4" />
-            <span>تسجيل دفع اشتراك</span>
-          </button>
-
-          <button
-            id="btn-profile-renew"
-            onClick={() => setIsRenewModalOpen(true)}
-            className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-[#151518] hover:bg-[#1f1f23] text-yellow-400 border border-yellow-400/30 font-bold text-xs sm:text-sm cursor-pointer"
-          >
-            <PlusCircle className="w-4 h-4" />
-            <span>تجديد دورة الاشتراك</span>
+            <MessageCircle className="w-4 h-4" />
+            <span>إرسال رسالة واتساب</span>
           </button>
 
           <button
             id="btn-profile-edit"
             onClick={() => onEditPlayer(player)}
-            className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-[#0a0a0a] hover:bg-[#151518] text-zinc-200 border border-[#1f1f23] font-medium text-xs sm:text-sm cursor-pointer"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#0a0a0a] hover:bg-[#151518] text-zinc-200 hover:text-white border border-[#1f1f23] font-bold text-xs sm:text-sm transition-colors cursor-pointer shadow-sm"
           >
             <Edit className="w-4 h-4 text-yellow-400" />
-            <span>تعديل</span>
+            <span>تعديل بيانات اللاعب</span>
           </button>
 
           <button
             id="btn-profile-delete"
             onClick={() => setIsDeleteModalOpen(true)}
-            className="p-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 transition-colors cursor-pointer"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-bold text-xs sm:text-sm transition-colors cursor-pointer"
             title="حذف اللاعب"
           >
             <Trash2 className="w-4 h-4" />
+            <span>حذف اللاعب</span>
           </button>
         </div>
       </div>
@@ -439,51 +432,115 @@ export const PlayerProfileView: React.FC<PlayerProfileViewProps> = ({
         </div>
       </div>
 
-      {/* Renew Subscription Modal */}
-      {isRenewModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setIsRenewModalOpen(false)} />
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="relative bg-[#0a0a0a] border border-[#1f1f23] rounded-3xl p-6 w-full max-w-md z-10 shadow-2xl space-y-5"
-          >
-            <h3 className="text-lg font-bold text-white">تجديد دورة الاشتراك الشهري</h3>
-            <p className="text-xs text-zinc-400 leading-relaxed">
-              سيتم إنشاء دورة اشتراك جديدة لمدة شهر للاعب <span className="text-white font-bold">{player.fullName}</span> مع الحفاظ على كامل السجل القديم.
-            </p>
+      {/* WhatsApp Message Modal */}
+      <AnimatePresence>
+        {isMessageModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-[#0a0a0a] border border-[#1f1f23] rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl"
+            >
+              <div className="p-5 border-b border-[#1f1f23] flex items-center justify-between bg-[#050505]">
+                <div className="flex items-center gap-2 text-emerald-400">
+                  <MessageCircle className="w-5 h-5" />
+                  <h3 className="text-base font-bold text-white">إرسال رسالة واتساب</h3>
+                </div>
+                <button
+                  onClick={() => setIsMessageModalOpen(false)}
+                  className="p-1 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
-                قيمة الاشتراك (EGP)
-              </label>
-              <input
-                type="number"
-                value={renewFee}
-                onChange={e => setRenewFee(Number(e.target.value))}
-                className="w-full px-3.5 py-2.5 bg-[#050505] border border-[#1f1f23] rounded-xl text-white text-sm focus:border-yellow-400 focus:outline-none"
-              />
-            </div>
+              <div className="p-6 space-y-4">
+                {/* Target selector */}
+                <div>
+                  <label className="block text-xs font-bold text-zinc-400 mb-2">جهة الاستلام</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleOpenMessageModal('player')}
+                      className={`p-2.5 rounded-xl text-xs font-bold border transition-all ${
+                        messageTarget === 'player'
+                          ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                          : 'bg-[#050505] text-zinc-400 border-[#1f1f23]'
+                      }`}
+                    >
+                      هاتف اللاعب ({player.phone})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenMessageModal('parent')}
+                      disabled={!player.parent?.parentPhone}
+                      className={`p-2.5 rounded-xl text-xs font-bold border transition-all ${
+                        messageTarget === 'parent'
+                          ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                          : 'bg-[#050505] text-zinc-400 border-[#1f1f23] disabled:opacity-40'
+                      }`}
+                    >
+                      ولي الأمر ({player.parent?.parentPhone || 'غير مسجل'})
+                    </button>
+                  </div>
+                </div>
 
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#1f1f23]">
-              <button
-                type="button"
-                onClick={() => setIsRenewModalOpen(false)}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-zinc-400 hover:text-white bg-[#151518] cursor-pointer"
-              >
-                إلغاء
-              </button>
-              <button
-                type="button"
-                onClick={handleRenewSubscription}
-                className="px-5 py-2 rounded-xl bg-gradient-to-r from-yellow-400 via-amber-400 to-yellow-500 hover:from-yellow-300 hover:to-yellow-400 text-black font-black text-xs cursor-pointer shadow-md shadow-yellow-500/20"
-              >
-                تأكيد التجديد
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
+                {/* Message body */}
+                <div>
+                  <label className="block text-xs font-bold text-zinc-400 mb-2">نص الرسالة</label>
+                  <textarea
+                    rows={4}
+                    value={customMessage}
+                    onChange={e => setCustomMessage(e.target.value)}
+                    className="w-full p-3.5 bg-[#050505] border border-[#1f1f23] rounded-xl text-white text-xs leading-relaxed focus:outline-none focus:border-emerald-500 text-right"
+                    placeholder="اكتب نص الرسالة هنا..."
+                  />
+                </div>
+
+                {/* Fast presets */}
+                <div className="space-y-1.5">
+                  <span className="text-[11px] text-zinc-500 block">نماذج رسائل سريعة:</span>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setCustomMessage(`مرحباً، نذكركم بقرب موعد تجديد اشتراك اللاعب ${player.fullName} في أكاديمية IFC. يرجى التكرم بالسداد في الموعد.`)}
+                      className="px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 rounded-lg text-[11px] border border-zinc-800"
+                    >
+                      تذكير بالاشتراك
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCustomMessage(`مرحباً، نود إحاطتكم علماً بموعد تمرين اللاعب ${player.fullName} القادم في أكاديمية IFC. مع تحيات الجهاز الفني.`)}
+                      className="px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 rounded-lg text-[11px] border border-zinc-800"
+                    >
+                      موعد التمرين
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-4 bg-[#050505] border-t border-[#1f1f23] flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsMessageModalOpen(false)}
+                  className="px-4 py-2 text-xs font-bold text-zinc-400 hover:text-white"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSendWhatsApp}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs shadow-lg shadow-emerald-500/20"
+                >
+                  <Send className="w-4 h-4" />
+                  <span>فتح وإرسال عبر واتساب</span>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Delete Confirmation Modal */}
       <ConfirmModal
